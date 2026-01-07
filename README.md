@@ -1,53 +1,82 @@
 # KGX Storage Web Server
 
-Web server for browsing and downloading S3 bucket contents via https://kgx-storage.rtx.ai
+Web interface for browsing and downloading KGX (Knowledge Graph Exchange) files from S3 storage.
 
-This is a standalone deployment component that runs on an EC2 instance. It is separate from the main translator-ingests repository.
+**Live Site**: https://kgx-storage.rtx.ai
+
+---
+
+## Overview
+
+This repository contains the **web interface** for the KGX Storage Component, which serves the NCATS Translator project by providing:
+- Long-term storage for processed KGX output files in S3
+- Public web interface for browsing and downloading files
+- Support for DOGSURF and other Translator teams
+
+**Main Implementation**: The core S3 upload logic and data processing pipeline is located in the main translator-ingests repository:
+https://github.com/NCATSTranslator/translator-ingests/tree/kgx_storage
+
+This repository only contains the Flask web server that provides the browsing interface. The actual data upload, storage management, and pipeline orchestration code lives in the translator-ingests repo.
+
+---
 
 ## Features
 
-- Browse S3 bucket folders and files with a clean web interface
-- Download files directly from S3 via presigned URLs
+- **Browse S3 bucket** folders and files with a clean web interface
+- **Download files** directly from S3 via presigned URLs (1-hour expiration)
 - **JSON viewer** with syntax highlighting for metadata files
-- Folder statistics (size, file count, modification date)
-- HTTPS with automatic SSL certificate management
-- Responsive design for mobile and desktop
+- **Folder statistics** showing size, file count, and last modified date
+- **HTTPS** with automatic SSL certificate management via Let's Encrypt
+- **Responsive design** for mobile and desktop
+- **Read-only public access** - no authentication required
+
+---
 
 ## Architecture
 
 ```
 User Browser
     ↓ HTTPS (port 443)
-Nginx (reverse proxy)
+Nginx (reverse proxy + SSL termination)
     ↓ HTTP (localhost:5000)
-Flask/Gunicorn Web Server
-    ↓ AWS SDK
+Flask + Gunicorn Web Server
+    ↓ AWS SDK (boto3)
 S3 Bucket (translator-ingests)
 ```
 
+**Components:**
+- **Nginx**: Handles HTTPS, SSL certificates, and reverse proxying
+- **Flask/Gunicorn**: Python web application serving the UI
+- **S3**: Stores all KGX output files uploaded by the main pipeline
+- **IAM Role**: EC2 instance has read-only S3 access (no credentials needed)
+
+---
+
 ## Requirements
 
-- **EC2 instance** (Ubuntu/Debian)
-- **IAM role** attached to EC2 with S3 read access (`s3:GetObject`, `s3:ListBucket`)
-- **Domain**: `kgx-storage.rtx.ai` DNS pointing to EC2 public IP
-- **Python 3.8+** with pip/uv
-- translator-ingests repository installed at `/home/ubuntu/translator-ingests`
+### Infrastructure
+- **EC2 instance** running Ubuntu/Debian (currently: t3.micro)
+- **IAM role** attached to EC2 with S3 read permissions (`s3:GetObject`, `s3:ListBucket`)
+- **Elastic IP** allocated and associated (prevents IP changes on restart)
+- **Domain**: `kgx-storage.rtx.ai` pointing to Elastic IP
+- **Security Group**: Allow ports 22 (SSH), 80 (HTTP), 443 (HTTPS)
 
-## Fresh EC2 Setup (Step-by-Step)
+### Software
+- **Python 3.8+** with pip or uv
+- **Nginx** for reverse proxy
+- **Certbot** for SSL certificates
+- **translator-ingests** repository installed at `/home/ubuntu/translator-ingests`
 
-### 1. Prerequisites
+---
 
-Clone the repository:
+## Installation (Fresh EC2 Setup)
+
+### 1. Clone This Repository
+
 ```bash
 cd /home/ubuntu
 git clone <repository-url> kgx-storage-webserver
 cd kgx-storage-webserver
-```
-
-Ensure translator-ingests is installed:
-```bash
-# Should exist at /home/ubuntu/translator-ingests
-ls /home/ubuntu/translator-ingests
 ```
 
 ### 2. Install System Dependencies
@@ -59,8 +88,9 @@ sudo apt install -y nginx certbot python3-certbot-nginx python3-pip python3-venv
 
 ### 3. Install Python Dependencies
 
+The web server uses the virtual environment from translator-ingests:
+
 ```bash
-# Navigate to translator-ingests and install in its venv
 cd /home/ubuntu/translator-ingests
 uv pip install flask gunicorn boto3
 ```
@@ -73,7 +103,7 @@ sudo ./setup-webserver-service.sh
 ```
 
 This script will:
-- Copy systemd service file to `/etc/systemd/system/`
+- Copy systemd service file to `/etc/systemd/system/kgx-storage-webserver.service`
 - Create log directory at `/var/log/kgx-storage/`
 - Enable and start the service
 
@@ -84,62 +114,53 @@ sudo systemctl status kgx-storage-webserver
 
 ### 5. Configure Nginx
 
-Copy the nginx configuration:
 ```bash
 sudo cp nginx-config /etc/nginx/sites-available/kgx-storage
 sudo ln -sf /etc/nginx/sites-available/kgx-storage /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
-```
-
-Test and reload nginx:
-```bash
 sudo nginx -t
 sudo systemctl restart nginx
 sudo systemctl enable nginx
 ```
 
-### 6. Configure HTTPS with Let's Encrypt
+### 6. Set Up HTTPS with Let's Encrypt
 
-Run Certbot to obtain SSL certificate:
 ```bash
 sudo certbot --nginx -d kgx-storage.rtx.ai
 ```
 
-You'll be prompted for:
-- **Email address** (for renewal notifications)
-- **Terms of Service** (accept)
-- **Redirect HTTP to HTTPS** (choose option 2: Yes)
-
-Certbot will automatically:
-- Obtain a free SSL certificate from Let's Encrypt
-- Modify your nginx config to enable HTTPS
-- Set up automatic certificate renewal (every 90 days)
+Certbot will:
+- Obtain a free SSL certificate
+- Modify nginx config for HTTPS
+- Set up automatic renewal (every 90 days)
 - Configure HTTP → HTTPS redirection
 
-Verify auto-renewal works:
+Test auto-renewal:
 ```bash
 sudo certbot renew --dry-run
 ```
 
-### 7. Configure EC2 Security Group
+### 7. Configure Security Group
 
-In AWS Console → EC2 → Security Groups, add these inbound rules:
+In AWS Console → EC2 → Security Groups:
 
 | Type  | Protocol | Port | Source    | Description           |
 |-------|----------|------|-----------|-----------------------|
-| HTTP  | TCP      | 80   | 0.0.0.0/0 | HTTP (redirects to HTTPS) |
-| HTTPS | TCP      | 443  | 0.0.0.0/0 | HTTPS traffic         |
 | SSH   | TCP      | 22   | Your IP   | SSH access            |
+| HTTP  | TCP      | 80   | 0.0.0.0/0 | HTTP (cert renewal)   |
+| HTTPS | TCP      | 443  | 0.0.0.0/0 | HTTPS traffic         |
 
 **Note**: Port 80 is required for Let's Encrypt certificate renewal.
 
 ### 8. Verify Setup
 
-Your site should now be accessible at:
-- **https://kgx-storage.rtx.ai** (primary)
+Access the site:
+- **https://kgx-storage.rtx.ai** (primary, secure)
 - **http://kgx-storage.rtx.ai** (redirects to HTTPS)
 
-Test JSON viewer by clicking on any `.json` file in the browser.
+Click on any `.json` file to test the JSON viewer.
+
+---
 
 ## File Structure
 
@@ -150,9 +171,11 @@ kgx-storage-webserver/
 ├── setup-webserver-service.sh         # Installation script
 ├── nginx-config                       # Nginx configuration template
 ├── public/                            # Static assets
-│   └── ncats-banner.png               # NCATS Translator banner
+│   └── ncats-banner.png              # NCATS Translator banner
 └── README.md                          # This file
 ```
+
+---
 
 ## Service Management
 
@@ -203,48 +226,49 @@ sudo certbot certificates
 # Manually renew certificates
 sudo certbot renew
 
-# Test renewal process (dry run)
+# Test renewal (dry run)
 sudo certbot renew --dry-run
 ```
 
+---
+
 ## Log Files
 
-- **Application access logs**: `/var/log/kgx-storage/access.log`
-- **Application error logs**: `/var/log/kgx-storage/error.log`
+- **Application access**: `/var/log/kgx-storage/access.log`
+- **Application errors**: `/var/log/kgx-storage/error.log`
 - **Systemd logs**: `journalctl -u kgx-storage-webserver`
-- **Nginx access logs**: `/var/log/nginx/access.log`
-- **Nginx error logs**: `/var/log/nginx/error.log`
+- **Nginx access**: `/var/log/nginx/access.log`
+- **Nginx errors**: `/var/log/nginx/error.log`
+
+---
 
 ## Updating the Application
 
 When you make changes to `web_server.py`:
 
 ```bash
-# Pull latest changes
 cd /home/ubuntu/kgx-storage-webserver
 git pull
-
-# Restart the service
 sudo systemctl restart kgx-storage-webserver
-
-# Check if it's running
 sudo systemctl status kgx-storage-webserver
 ```
 
 No nginx restart needed unless you change nginx configuration.
 
+---
+
 ## Troubleshooting
 
-### Service won't start
+### Service Won't Start
 
 ```bash
 # Check detailed logs
 sudo journalctl -u kgx-storage-webserver -n 50
 
-# Check if port 5000 is available
+# Verify port 5000 is available
 sudo ss -tulpn | grep 5000
 
-# Verify Python dependencies
+# Check Python dependencies
 cd /home/ubuntu/translator-ingests
 source .venv/bin/activate
 python -c "import flask, boto3, gunicorn"
@@ -252,7 +276,7 @@ python -c "import flask, boto3, gunicorn"
 
 ### 502 Bad Gateway
 
-Usually means Flask app isn't running:
+This usually means the Flask app isn't running:
 ```bash
 sudo systemctl status kgx-storage-webserver
 sudo journalctl -u kgx-storage-webserver -n 50
@@ -266,21 +290,29 @@ sudo certbot certificates
 
 # Verify nginx SSL config
 sudo nginx -t
-
-# Check SSL configuration
 sudo cat /etc/nginx/sites-available/kgx-storage
 ```
 
-### Can't access JSON viewer
+### JSON Viewer Not Working
 
-Ensure you restarted the service after updating `web_server.py`:
+Ensure you restarted after updating `web_server.py`:
 ```bash
 sudo systemctl restart kgx-storage-webserver
 ```
 
+### S3 Access Denied
+
+Verify IAM role is attached to EC2 instance:
+```bash
+# Check instance metadata for IAM role
+curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/
+```
+
+---
+
 ## IAM Permissions
 
-The EC2 instance needs an IAM role with this policy:
+The EC2 instance requires an IAM role with this policy:
 
 ```json
 {
@@ -301,6 +333,14 @@ The EC2 instance needs an IAM role with this policy:
 }
 ```
 
+**Security Notes:**
+- Uses IAM role, not access keys (more secure)
+- Read-only access to S3
+- Presigned URLs expire after 1 hour
+- No write permissions needed for web server
+
+---
+
 ## Development
 
 To run locally for testing:
@@ -314,21 +354,38 @@ python web_server.py
 
 Access at http://localhost:5000
 
-**Note**: Don't use Flask's development server in production. Always use Gunicorn via systemd.
+**Warning**: Don't use Flask's development server in production. Always use Gunicorn via systemd.
 
-## Security Considerations
-
-- **S3 Access**: Uses IAM role, not access keys
-- **HTTPS**: All traffic encrypted via Let's Encrypt SSL
-- **Presigned URLs**: Temporary S3 URLs with 1-hour expiration
-- **No Authentication**: Public read-only access to S3 bucket contents
-- **Reverse Proxy**: Flask app only listens on localhost
+---
 
 ## Production URLs
 
 - **Main site**: https://kgx-storage.rtx.ai
-- **Example JSON viewer**: https://kgx-storage.rtx.ai/view/[path-to-json-file]
-- **Example download**: https://kgx-storage.rtx.ai/download/[path-to-file]
+- **Example folder**: https://kgx-storage.rtx.ai/browse/releases/alliance/latest/
+- **JSON viewer**: https://kgx-storage.rtx.ai/view/releases/alliance/latest/graph-metadata.json
+- **Download**: https://kgx-storage.rtx.ai/download/releases/alliance/latest/alliance.tar.zst
+
+---
+
+## Related Repositories
+
+- **Main Implementation**: https://github.com/NCATSTranslator/translator-ingests/tree/kgx_storage
+  - Contains S3 upload logic, EBS cleanup, and pipeline orchestration
+  - Run `make upload` to push data to S3
+  - See `/src/translator_ingest/util/storage/` for implementation details
+
+---
+
+## Security Considerations
+
+- **HTTPS**: All traffic encrypted via Let's Encrypt SSL
+- **IAM Role**: No hardcoded credentials, uses EC2 instance role
+- **Presigned URLs**: Temporary S3 download URLs (1-hour expiration)
+- **Reverse Proxy**: Flask only listens on localhost (not exposed directly)
+- **No Authentication**: Public read-only access to S3 bucket contents
+- **No Rate Limiting**: Currently no rate limiting implemented
+
+---
 
 ## License
 
