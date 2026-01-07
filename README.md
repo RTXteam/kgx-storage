@@ -14,7 +14,7 @@ This repository contains the **web interface** for the KGX Storage Component, wh
 - Support for DOGSURF and other Translator teams
 
 **Main Implementation**: The core S3 upload logic and data processing pipeline is located in the main translator-ingests repository:
-https://github.com/NCATSTranslator/translator-ingests/tree/kgx_storage
+https://github.com/NCATSTranslator/translator-ingests/tree/kgx_storage/src/translator_ingest/util/storage
 
 This repository only contains the Flask web server that provides the browsing interface. The actual data upload, storage management, and pipeline orchestration code lives in the translator-ingests repo.
 
