@@ -8,27 +8,20 @@ Web interface for browsing and downloading KGX (Knowledge Graph Exchange) files 
 
 ## Overview
 
-This repository contains the **web interface** for the KGX Storage Component, which serves the NCATS Translator project by providing:
-- Long-term storage for processed KGX output files in S3
-- Public web interface for browsing and downloading files
-- Support for DOGSURF and other Translator teams
+Web interface for the KGX Storage Component, serving the NCATS Translator project. Provides public access to processed KGX output files stored in S3 for DOGSURF and other Translator teams.
 
-**Main Implementation**: The core S3 upload logic and data processing pipeline is located in the main translator-ingests repository:
+This repository contains only the Flask web server for browsing and downloading. The core S3 upload logic and data processing pipeline is in the main translator-ingests repository:
 https://github.com/NCATSTranslator/translator-ingests/tree/kgx_storage/src/translator_ingest/util/storage
-
-This repository only contains the Flask web server that provides the browsing interface. The actual data upload, storage management, and pipeline orchestration code lives in the translator-ingests repo.
 
 ---
 
 ## Features
 
-- **Browse S3 bucket** folders and files with a clean web interface
-- **Download files** directly from S3 via presigned URLs (1-hour expiration)
-- **JSON viewer** with syntax highlighting for metadata files
-- **Folder statistics** showing size, file count, and last modified date
-- **HTTPS** with automatic SSL certificate management via Let's Encrypt
-- **Responsive design** for mobile and desktop
-- **Read-only public access** - no authentication required
+- Browse S3 bucket folders and files
+- Download files via presigned URLs (1-hour expiration)
+- JSON viewer with syntax highlighting for metadata files
+- HTTPS with SSL certificate management via Let's Encrypt
+- Public read-only access
 
 ---
 
@@ -45,27 +38,27 @@ S3 Bucket (translator-ingests)
 ```
 
 **Components:**
-- **Nginx**: Handles HTTPS, SSL certificates, and reverse proxying
-- **Flask/Gunicorn**: Python web application serving the UI
-- **S3**: Stores all KGX output files uploaded by the main pipeline
-- **IAM Role**: EC2 instance has read-only S3 access (no credentials needed)
+- **Nginx**: HTTPS, SSL certificates, reverse proxying
+- **Flask/Gunicorn**: Web application server
+- **S3**: KGX output file storage
+- **IAM Role**: EC2 instance read-only S3 access
 
 ---
 
 ## Requirements
 
 ### Infrastructure
-- **EC2 instance** running Ubuntu/Debian (currently: t3.micro)
-- **IAM role** attached to EC2 with S3 read permissions (`s3:GetObject`, `s3:ListBucket`)
-- **Elastic IP** allocated and associated (prevents IP changes on restart)
-- **Domain**: `kgx-storage.rtx.ai` pointing to Elastic IP
-- **Security Group**: Allow ports 22 (SSH), 80 (HTTP), 443 (HTTPS)
+- EC2 instance running Ubuntu/Debian (t3.medium)
+- IAM role with S3 read permissions (`s3:GetObject`, `s3:ListBucket`)
+- Elastic IP allocated and associated
+- Domain `kgx-storage.rtx.ai` pointing to Elastic IP
+- Security Group allowing ports 22 (SSH), 80 (HTTP), 443 (HTTPS)
 
 ### Software
-- **Python 3.8+** with pip or uv
-- **Nginx** for reverse proxy
-- **Certbot** for SSL certificates
-- **translator-ingests** repository installed at `/home/ubuntu/translator-ingests`
+- Python 3.12.3 (specified in `.python-version`)
+- Nginx for reverse proxy
+- Certbot for SSL certificates
+- Python packages with pinned versions in `requirements.txt`
 
 ---
 
@@ -75,7 +68,7 @@ S3 Bucket (translator-ingests)
 
 ```bash
 cd /home/ubuntu
-git clone <repository-url> kgx-storage-webserver
+git clone https://github.com/RTXteam/kgx-storage.git kgx-storage-webserver
 cd kgx-storage-webserver
 ```
 
@@ -83,16 +76,16 @@ cd kgx-storage-webserver
 
 ```bash
 sudo apt update
-sudo apt install -y nginx certbot python3-certbot-nginx python3-pip python3-venv
+sudo apt install -y nginx certbot python3-certbot-nginx python3.12 python3.12-venv python3-pip
 ```
 
-### 3. Install Python Dependencies
-
-The web server uses the virtual environment from translator-ingests:
+### 3. Set Up Python Virtual Environment
 
 ```bash
-cd /home/ubuntu/translator-ingests
-uv pip install flask gunicorn boto3
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
 ### 4. Set Up the Web Service
@@ -100,15 +93,6 @@ uv pip install flask gunicorn boto3
 ```bash
 cd /home/ubuntu/kgx-storage-webserver
 sudo ./setup-webserver-service.sh
-```
-
-This script will:
-- Copy systemd service file to `/etc/systemd/system/kgx-storage-webserver.service`
-- Create log directory at `/var/log/kgx-storage/`
-- Enable and start the service
-
-Verify it's running:
-```bash
 sudo systemctl status kgx-storage-webserver
 ```
 
@@ -127,38 +111,22 @@ sudo systemctl enable nginx
 
 ```bash
 sudo certbot --nginx -d kgx-storage.rtx.ai
-```
-
-Certbot will:
-- Obtain a free SSL certificate
-- Modify nginx config for HTTPS
-- Set up automatic renewal (every 90 days)
-- Configure HTTP → HTTPS redirection
-
-Test auto-renewal:
-```bash
 sudo certbot renew --dry-run
 ```
 
 ### 7. Configure Security Group
 
-In AWS Console → EC2 → Security Groups:
+Configure EC2 Security Group inbound rules:
 
-| Type  | Protocol | Port | Source    | Description           |
-|-------|----------|------|-----------|-----------------------|
-| SSH   | TCP      | 22   | Your IP   | SSH access            |
-| HTTP  | TCP      | 80   | 0.0.0.0/0 | HTTP (cert renewal)   |
-| HTTPS | TCP      | 443  | 0.0.0.0/0 | HTTPS traffic         |
-
-**Note**: Port 80 is required for Let's Encrypt certificate renewal.
+| Type  | Protocol | Port | Source    |
+|-------|----------|------|-----------|
+| SSH   | TCP      | 22   | Your IP   |
+| HTTP  | TCP      | 80   | 0.0.0.0/0 |
+| HTTPS | TCP      | 443  | 0.0.0.0/0 |
 
 ### 8. Verify Setup
 
-Access the site:
-- **https://kgx-storage.rtx.ai** (primary, secure)
-- **http://kgx-storage.rtx.ai** (redirects to HTTPS)
-
-Click on any `.json` file to test the JSON viewer.
+Access https://kgx-storage.rtx.ai
 
 ---
 
@@ -167,9 +135,12 @@ Click on any `.json` file to test the JSON viewer.
 ```
 kgx-storage-webserver/
 ├── web_server.py                      # Flask application
+├── requirements.txt                   # Python dependencies with pinned versions
+├── .python-version                    # Python version specification (3.12.3)
 ├── kgx-storage-webserver.service      # Systemd service file
 ├── setup-webserver-service.sh         # Installation script
 ├── nginx-config                       # Nginx configuration template
+├── .gitignore                         # Git ignore rules
 ├── public/                            # Static assets
 │   └── ncats-banner.png              # NCATS Translator banner
 └── README.md                          # This file
@@ -234,17 +205,13 @@ sudo certbot renew --dry-run
 
 ## Log Files
 
-- **Application access**: `/var/log/kgx-storage/access.log`
-- **Application errors**: `/var/log/kgx-storage/error.log`
-- **Systemd logs**: `journalctl -u kgx-storage-webserver`
-- **Nginx access**: `/var/log/nginx/access.log`
-- **Nginx errors**: `/var/log/nginx/error.log`
+- Application: `/var/log/kgx-storage/access.log`, `/var/log/kgx-storage/error.log`
+- Systemd: `journalctl -u kgx-storage-webserver`
+- Nginx: `/var/log/nginx/access.log`, `/var/log/nginx/error.log`
 
 ---
 
 ## Updating the Application
-
-When you make changes to `web_server.py`:
 
 ```bash
 cd /home/ubuntu/kgx-storage-webserver
@@ -252,8 +219,6 @@ git pull
 sudo systemctl restart kgx-storage-webserver
 sudo systemctl status kgx-storage-webserver
 ```
-
-No nginx restart needed unless you change nginx configuration.
 
 ---
 
@@ -269,14 +234,13 @@ sudo journalctl -u kgx-storage-webserver -n 50
 sudo ss -tulpn | grep 5000
 
 # Check Python dependencies
-cd /home/ubuntu/translator-ingests
+cd /home/ubuntu/kgx-storage-webserver
 source .venv/bin/activate
 python -c "import flask, boto3, gunicorn"
 ```
 
 ### 502 Bad Gateway
 
-This usually means the Flask app isn't running:
 ```bash
 sudo systemctl status kgx-storage-webserver
 sudo journalctl -u kgx-storage-webserver -n 50
@@ -285,26 +249,20 @@ sudo journalctl -u kgx-storage-webserver -n 50
 ### SSL Certificate Issues
 
 ```bash
-# Check certificate status
 sudo certbot certificates
-
-# Verify nginx SSL config
 sudo nginx -t
 sudo cat /etc/nginx/sites-available/kgx-storage
 ```
 
 ### JSON Viewer Not Working
 
-Ensure you restarted after updating `web_server.py`:
 ```bash
 sudo systemctl restart kgx-storage-webserver
 ```
 
 ### S3 Access Denied
 
-Verify IAM role is attached to EC2 instance:
 ```bash
-# Check instance metadata for IAM role
 curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/
 ```
 
@@ -312,7 +270,7 @@ curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/
 
 ## IAM Permissions
 
-The EC2 instance requires an IAM role with this policy:
+Required IAM policy for EC2 instance role:
 
 ```json
 {
@@ -333,57 +291,121 @@ The EC2 instance requires an IAM role with this policy:
 }
 ```
 
-**Security Notes:**
-- Uses IAM role, not access keys (more secure)
-- Read-only access to S3
-- Presigned URLs expire after 1 hour
-- No write permissions needed for web server
-
 ---
 
 ## Development
 
-To run locally for testing:
-
 ```bash
-cd /home/ubuntu/translator-ingests
-source .venv/bin/activate
 cd /home/ubuntu/kgx-storage-webserver
+source .venv/bin/activate
 python web_server.py
 ```
 
 Access at http://localhost:5000
 
-**Warning**: Don't use Flask's development server in production. Always use Gunicorn via systemd.
-
 ---
 
-## Production URLs
+## Production
 
-- **Main site**: https://kgx-storage.rtx.ai
-- **Example folder**: https://kgx-storage.rtx.ai/browse/releases/alliance/latest/
-- **JSON viewer**: https://kgx-storage.rtx.ai/view/releases/alliance/latest/graph-metadata.json
-- **Download**: https://kgx-storage.rtx.ai/download/releases/alliance/latest/alliance.tar.zst
+### Web Interface
+
+- Main site: https://kgx-storage.rtx.ai
+- Browse folders: `https://kgx-storage.rtx.ai/?path=<folder-path>`
+- View JSON: `https://kgx-storage.rtx.ai/view/<s3-key>`
+- Download file: `https://kgx-storage.rtx.ai/download/<s3-key>`
+
+### Download Methods
+
+#### Method 1: HTTPS via Web Interface (Recommended for users)
+
+Download individual files using curl:
+```bash
+# Download a single file
+curl -O https://kgx-storage.rtx.ai/download/releases/alliance/latest/alliance-nodes.tsv.gz
+
+# Download with custom filename
+curl -o myfile.tar.zst https://kgx-storage.rtx.ai/download/releases/alliance/latest/alliance.tar.zst
+
+# Download with progress bar
+curl -# -O https://kgx-storage.rtx.ai/download/releases/alliance/latest/alliance-edges.tsv.gz
+```
+
+Download using wget:
+```bash
+# Download a single file
+wget https://kgx-storage.rtx.ai/download/releases/alliance/latest/alliance-nodes.tsv.gz
+
+# Download with custom filename
+wget -O myfile.json https://kgx-storage.rtx.ai/download/releases/alliance/latest/graph-metadata.json
+```
+
+#### Method 2: Direct S3 Access (Requires AWS credentials)
+
+Using AWS CLI with read permissions:
+```bash
+# Download single file
+aws s3 cp s3://translator-ingests/releases/alliance/latest/alliance-nodes.tsv.gz .
+
+# Download entire folder
+aws s3 cp s3://translator-ingests/releases/alliance/latest/ . --recursive
+
+# Download with include/exclude filters
+aws s3 cp s3://translator-ingests/releases/alliance/latest/ . --recursive --exclude "*" --include "*.json"
+
+# Sync folder (only downloads new/changed files)
+aws s3 sync s3://translator-ingests/releases/alliance/latest/ ./local-folder/
+```
+
+#### Method 3: Programmatic Access via Python
+
+```python
+import requests
+
+# Download via HTTPS
+url = "https://kgx-storage.rtx.ai/download/releases/alliance/latest/graph-metadata.json"
+response = requests.get(url)
+with open("graph-metadata.json", "wb") as f:
+    f.write(response.content)
+
+# Download via boto3 (requires AWS credentials)
+import boto3
+s3 = boto3.client("s3")
+s3.download_file(
+    "translator-ingests",
+    "releases/alliance/latest/graph-metadata.json",
+    "graph-metadata.json"
+)
+```
+
+### Example File Paths
+
+```
+releases/alliance/latest/alliance-nodes.tsv.gz
+releases/alliance/latest/alliance-edges.tsv.gz
+releases/alliance/latest/alliance.tar.zst
+releases/alliance/latest/graph-metadata.json
+releases/reactome/latest/reactome-nodes.tsv.gz
+releases/reactome/latest/reactome-edges.tsv.gz
+```
 
 ---
 
 ## Related Repositories
 
-- **Main Implementation**: https://github.com/NCATSTranslator/translator-ingests/tree/kgx_storage
-  - Contains S3 upload logic, EBS cleanup, and pipeline orchestration
-  - Run `make upload` to push data to S3
-  - See `/src/translator_ingest/util/storage/` for implementation details
+Main implementation: https://github.com/NCATSTranslator/translator-ingests/tree/kgx_storage
+
+Contains S3 upload logic, EBS cleanup, and pipeline orchestration.
 
 ---
 
-## Security Considerations
+## Security
 
-- **HTTPS**: All traffic encrypted via Let's Encrypt SSL
-- **IAM Role**: No hardcoded credentials, uses EC2 instance role
-- **Presigned URLs**: Temporary S3 download URLs (1-hour expiration)
-- **Reverse Proxy**: Flask only listens on localhost (not exposed directly)
-- **No Authentication**: Public read-only access to S3 bucket contents
-- **No Rate Limiting**: Currently no rate limiting implemented
+- HTTPS via Let's Encrypt SSL
+- IAM role authentication (no hardcoded credentials)
+- Presigned URLs with 1-hour expiration
+- Flask listens on localhost only
+- Public read-only access
+- No rate limiting
 
 ---
 
