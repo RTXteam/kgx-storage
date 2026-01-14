@@ -222,6 +222,12 @@ def download(s3_key):
     return "Error generating download URL", 500
 
 
+@app.route("/docs")
+def docs():
+    """Documentation page for file access."""
+    return render_template_string(DOCS_TEMPLATE, bucket=BUCKET_NAME)
+
+
 @app.route("/public/<path:filename>")
 def serve_public(filename):
     """Serve static files from public directory."""
@@ -476,9 +482,18 @@ HTML_TEMPLATE = """
 <body>
     <div class="header">
         <div class="header-content">
-            <h1>KGX STORAGE</h1>
-            <div class="path">
-                <a href="/">s3://{{ bucket }}</a>{% for crumb in breadcrumbs %}/<a href="/?path={{ crumb.path }}">{{ crumb.name }}</a>{% endfor %}
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h1>KGX STORAGE</h1>
+                    <div class="path">
+                        <a href="/">s3://{{ bucket }}</a>{% for crumb in breadcrumbs %}/<a href="/?path={{ crumb.path }}">{{ crumb.name }}</a>{% endfor %}
+                    </div>
+                </div>
+                <div>
+                    <a href="/docs" style="color: rgba(255, 255, 255, 0.9); text-decoration: none; font-size: 0.85em; padding: 6px 16px; border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 4px; transition: all 0.15s;">
+                        Documentation
+                    </a>
+                </div>
             </div>
         </div>
     </div>
@@ -553,6 +568,7 @@ HTML_TEMPLATE = """
                 <h3>KGX Storage Component</h3>
                 <p>This interface provides access to KGX (Knowledge Graph Exchange) format outputs stored in the S3 bucket for the NCATS Biomedical Data Translator project. Browse and download knowledge graph data files including nodes, edges, and metadata from various biomedical data sources processed through the Translator Ingests pipeline.</p>
                 <div class="footer-links">
+                    <a href="/docs">File Access Documentation</a> • 
                     <a href="https://github.com/NCATSTranslator/translator-ingests" target="_blank">View Source Code on GitHub</a>
                 </div>
             </div>
@@ -726,8 +742,17 @@ JSON_VIEWER_TEMPLATE = """
 <body>
     <div class="header">
         <div class="header-content">
-            <h1>KGX STORAGE</h1>
-            <div class="path">{{ file_name }}</div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h1>KGX STORAGE</h1>
+                    <div class="path">{{ file_name }}</div>
+                </div>
+                <div>
+                    <a href="/docs" style="color: rgba(255, 255, 255, 0.9); text-decoration: none; font-size: 0.85em; padding: 6px 16px; border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 4px; transition: all 0.15s;">
+                        Documentation
+                    </a>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -798,6 +823,220 @@ JSON_VIEWER_TEMPLATE = """
 
         // Apply syntax highlighting on load
         highlightJSON();
+    </script>
+</body>
+</html>
+"""
+
+
+DOCS_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Download Files - KGX Storage</title>
+    <style>
+        :root {
+            --bg: #f4f4f6;
+            --surface: #ffffff;
+            --text: #1e1e2e;
+            --text-dim: #71717a;
+            --accent: #7c3aed;
+            --primary: #5b4b8a;
+        }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+        .header {
+            background: var(--primary);
+            padding: 16px 24px;
+        }
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            font-size: 1.1em;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            color: #ffffff;
+        }
+        .header-nav a {
+            color: rgba(255, 255, 255, 0.9);
+            text-decoration: none;
+            font-size: 0.85em;
+            padding: 6px 12px;
+            transition: all 0.15s;
+        }
+        .header-nav a:hover {
+            color: #ffffff;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 24px;
+        }
+        h2 {
+            font-size: 1.4em;
+            font-weight: 600;
+            margin: 40px 0 20px 0;
+            color: var(--primary);
+        }
+        .intro {
+            font-size: 1em;
+            color: var(--text-dim);
+            margin-bottom: 40px;
+        }
+        .cmd-block {
+            background: #2d2d2d;
+            color: #e5e7eb;
+            padding: 16px 20px;
+            margin: 12px 0;
+            font-size: 0.9em;
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+        }
+        .cmd-block:hover {
+            background: #3a3a3a;
+        }
+        .cmd-block::after {
+            content: 'click to copy';
+            position: absolute;
+            right: 20px;
+            top: 16px;
+            font-size: 0.75em;
+            color: var(--accent);
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .cmd-block:hover::after {
+            opacity: 1;
+        }
+        .cmd-block.copied::after {
+            content: 'copied!';
+            color: #10b981;
+            opacity: 1;
+        }
+        .cmd-label {
+            font-size: 0.8em;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin: 20px 0 8px 0;
+            font-weight: 500;
+        }
+        .note {
+            font-size: 0.85em;
+            color: var(--text-dim);
+            margin: 8px 0 20px 0;
+            font-style: italic;
+        }
+        .path {
+            color: var(--accent);
+            font-family: monospace;
+            font-size: 0.9em;
+            display: block;
+            margin: 8px 0;
+        }
+        @media (max-width: 768px) {
+            .header-content {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <h1>KGX STORAGE</h1>
+            <div class="header-nav">
+                <a href="/">Browse Files</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <p class="intro">Download knowledge graph files via HTTPS or S3. Both methods are publicly accessible without authentication.</p>
+
+        <h2>HTTPS Download</h2>
+        
+        <div class="cmd-label">Single File</div>
+        <div class="cmd-block" onclick="copy(this)">curl -O "https://kgx-storage.rtx.ai/download/releases/go_cam/latest/go_cam.tar.zst"</div>
+        <p class="note">Replace go_cam with your source name</p>
+        
+        <div class="cmd-label">Specific Version</div>
+        <div class="cmd-block" onclick="copy(this)">curl -O "https://kgx-storage.rtx.ai/download/data/ctd/November_2025/1.0/normalization_2025sep1/merged_nodes.jsonl"</div>
+        
+        <div class="cmd-label">With wget</div>
+        <div class="cmd-block" onclick="copy(this)">wget "https://kgx-storage.rtx.ai/download/releases/alliance/latest/alliance.tar.zst"</div>
+
+        <h2>S3 Download</h2>
+        <p class="note">Requires AWS CLI installed locally</p>
+        
+        <div class="cmd-label">Install AWS CLI</div>
+        <div class="cmd-block" onclick="copy(this)">brew install awscli</div>
+        <p class="note">macOS</p>
+        <div class="cmd-block" onclick="copy(this)">sudo apt install awscli</div>
+        <p class="note">Ubuntu/Debian</p>
+        
+        <div class="cmd-label">Single File</div>
+        <div class="cmd-block" onclick="copy(this)">aws s3 cp s3://{{ bucket }}/releases/go_cam/latest/go_cam.tar.zst . --no-sign-request</div>
+        <p class="note">No AWS credentials required with --no-sign-request</p>
+        
+        <div class="cmd-label">Entire Directory (Recursively)</div>
+        <div class="cmd-block" onclick="copy(this)">aws s3 sync s3://{{ bucket }}/releases/alliance/latest/ ./alliance/ --no-sign-request</div>
+        <p class="note">Downloads all files in directory</p>
+        
+        <div class="cmd-label">List Available Files</div>
+        <div class="cmd-block" onclick="copy(this)">aws s3 ls s3://{{ bucket }}/releases/ --no-sign-request</div>
+
+        <h2>Common Paths</h2>
+        
+        <div class="cmd-label">Latest Release</div>
+        <span class="path">releases/{source}/latest/{source}.tar.zst</span>
+        
+        <div class="cmd-label">Merged Files</div>
+        <span class="path">data/{source}/{version}/{transform}/normalization_{norm}/merged_nodes.jsonl</span>
+        <span class="path">data/{source}/{version}/{transform}/normalization_{norm}/merged_edges.jsonl</span>
+        
+        <div class="cmd-label">Metadata</div>
+        <span class="path">data/{source}/latest-build.json</span>
+        <span class="path">releases/{source}/latest/graph-metadata.json</span>
+
+        <h2>Extract Archives</h2>
+        
+        <div class="cmd-label">Install zstd</div>
+        <div class="cmd-block" onclick="copy(this)">brew install zstd</div>
+        <p class="note">macOS</p>
+        <div class="cmd-block" onclick="copy(this)">sudo apt install zstd</div>
+        <p class="note">Ubuntu/Debian</p>
+        
+        <div class="cmd-label">Extract .tar.zst</div>
+        <div class="cmd-block" onclick="copy(this)">tar --use-compress-program=zstd -xvf go_cam.tar.zst</div>
+    </div>
+
+    <script>
+        function copy(el) {
+            navigator.clipboard.writeText(el.textContent.trim()).then(() => {
+                el.classList.add('copied');
+                setTimeout(() => el.classList.remove('copied'), 2000);
+            });
+        }
     </script>
 </body>
 </html>
