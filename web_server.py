@@ -136,11 +136,12 @@ def get_breadcrumbs(path):
     return breadcrumbs
 
 
-@app.route("/")
-def index():
-    """Browse directory."""
-    path = request.args.get("path", "")
-
+def browse_directory(path):
+    """Shared function to browse a directory path."""
+    # Ensure path ends with / for directories
+    if path and not path.endswith("/"):
+        path += "/"
+    
     try:
         folders, files = list_directory(path)
         parent = get_parent_path(path) if path else None
@@ -165,6 +166,21 @@ def index():
         )
     except ClientError as e:
         return f"Error: {e}", 500
+
+
+@app.route("/")
+def index():
+    """Browse root directory or handle legacy query parameter."""
+    # Support legacy ?path= query parameter for backward compatibility
+    path = request.args.get("path", "")
+    
+    # Redirect legacy query parameter URLs to clean URLs
+    if path:
+        # Ensure path ends with / for directory browsing
+        clean_path = path if path.endswith("/") else path + "/"
+        return redirect(f"/{clean_path}", code=301)
+    
+    return browse_directory("")
 
 
 @app.route("/view/<path:s3_key>")
@@ -232,6 +248,27 @@ def docs():
 def serve_public(filename):
     """Serve static files from public directory."""
     return send_from_directory(PUBLIC_DIR, filename)
+
+
+@app.route("/<path:folder_path>")
+def browse_path(folder_path):
+    """Browse directory using clean URL path (e.g., /releases/alliance/latest/).
+    
+    This catch-all route must come AFTER specific routes like /view/, /download/, /docs/, /public/
+    to ensure those routes are matched first. Flask matches routes in order of definition.
+    
+    Note: Paths starting with 'view', 'download', 'docs', or 'public' should not reach here
+    unless they have trailing slashes (which would be incorrect usage).
+    """
+    # Safety check: don't handle paths that should be specific routes
+    if folder_path.rstrip("/") in ("view", "download", "docs", "public"):
+        return "Not found", 404
+    
+    # Ensure path ends with / for directories
+    if not folder_path.endswith("/"):
+        folder_path += "/"
+    
+    return browse_directory(folder_path)
 
 
 HTML_TEMPLATE = """
@@ -486,7 +523,7 @@ HTML_TEMPLATE = """
                 <div>
                     <h1>KGX STORAGE</h1>
                     <div class="path">
-                        <a href="/">s3://{{ bucket }}</a>{% for crumb in breadcrumbs %}/<a href="/?path={{ crumb.path }}">{{ crumb.name }}</a>{% endfor %}
+                        <a href="/">s3://{{ bucket }}</a>{% for crumb in breadcrumbs %}/<a href="/{{ crumb.path }}">{{ crumb.name }}</a>{% endfor %}
                     </div>
                 </div>
                 <div>
@@ -501,7 +538,7 @@ HTML_TEMPLATE = """
     <div class="container">
         <div class="toolbar">
             {% if parent is not none %}
-            <a href="/?path={{ parent }}" class="back-btn">
+            <a href="/{{ parent }}" class="back-btn">
                 <span>&#8592;</span> Back
             </a>
             {% endif %}
@@ -530,7 +567,7 @@ HTML_TEMPLATE = """
             {% if folders %}
             <div class="section-label">Folders</div>
             {% for folder in folders %}
-            <a href="/?path={{ folder.path }}" class="tree-item">
+            <a href="/{{ folder.path }}" class="tree-item">
                 <span class="tree-name">
                     <span class="tree-icon folder">&#128193;</span>
                     {{ folder.name }}
@@ -758,7 +795,7 @@ JSON_VIEWER_TEMPLATE = """
 
     <div class="container">
         <div class="toolbar">
-            <a href="/?path={{ parent_path }}" class="btn">
+            <a href="/{{ parent_path }}" class="btn">
                 <span>&#8592;</span> Back to Folder
             </a>
             <a href="{{ download_url }}" class="btn btn-primary" download>
