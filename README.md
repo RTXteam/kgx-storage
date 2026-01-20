@@ -18,9 +18,10 @@ The system architecture separates data processing from data access: the data pro
 
 ## Features
 
-- **Browse S3 bucket folders and files**: Provides a hierarchical directory interface for navigating the S3 bucket structure. Users can explore folder hierarchies without requiring direct S3 access or AWS credentials.
+- **Browse S3 bucket folders and files**: Provides a hierarchical directory interface for navigating the S3 bucket structure using clean URL paths (e.g., `/releases/alliance/latest/`). Users can explore folder hierarchies without requiring direct S3 access or AWS credentials. Legacy query parameter URLs (`/?path=...`) are automatically redirected to clean URLs for backward compatibility.
 - **Download files via presigned URLs (1-hour expiration)**: Generates temporary authenticated S3 URLs that enable public downloads without exposing permanent credentials. The 1-hour expiration provides security while allowing sufficient time for downloads.
 - **JSON viewer with syntax highlighting for metadata files**: Displays JSON metadata files (such as `graph-metadata.json`) directly in the browser with syntax highlighting and formatting. This eliminates the need to download files just to inspect their contents. Includes a download button for saving the file locally.
+- **Documentation page**: Provides comprehensive documentation with URL examples for downloading files via HTTPS (curl, wget) and direct S3 access (AWS CLI). Includes examples for common file paths and archive extraction instructions.
 - **HTTPS with SSL certificate management via Let's Encrypt**: Provides encrypted connections for data security. Let's Encrypt certificates are free and automatically renewed, eliminating manual certificate management.
 - **Public read-only access**: No authentication is required, enabling open access to research data for the Translator consortium and broader scientific community.
 
@@ -40,7 +41,7 @@ S3 Bucket (translator-ingests)
 
 **Components:**
 - **Nginx**: Handles incoming HTTPS connections on port 443, performs SSL/TLS termination (decryption), and forwards requests to the Flask application on localhost:5000. This separation allows Nginx to efficiently handle connection management, static file serving, and SSL processing while Flask focuses on application logic.
-- **Flask/Gunicorn**: Flask provides the web application framework for routing and S3 integration. Gunicorn serves as the WSGI (Web Server Gateway Interface) server that runs multiple Flask worker processes for concurrent request handling. Gunicorn is production-grade and more robust than Flask's development server.
+- **Flask/Gunicorn**: Flask provides the web application framework for routing and S3 integration. The application implements clean URL routing where directory paths are embedded directly in the URL structure (e.g., `/releases/alliance/latest/`) rather than using query parameters. Route ordering ensures specific endpoints (`/view/`, `/download/`, `/docs/`, `/public/`) are matched before the catch-all directory browsing route. Gunicorn serves as the WSGI (Web Server Gateway Interface) server that runs multiple Flask worker processes for concurrent request handling. Gunicorn is production-grade and more robust than Flask's development server.
 - **S3**: Amazon S3 bucket (`translator-ingests`) stores the KGX output files. Files are accessed via presigned URLs with 1-hour expiration, which provide temporary authenticated access without exposing permanent credentials.
 - **IAM Role**: EC2 instance-attached IAM role provides credentials for S3 API calls via the instance metadata service (http://169.254.169.254). This eliminates the need for hardcoded credentials and follows AWS security best practices.
 
@@ -179,7 +180,7 @@ Repository structure and purpose of each file:
 
 ```
 kgx-storage-webserver/
-├── web_server.py                      # Flask application with S3 integration and routing logic
+├── web_server.py                      # Flask application with S3 integration, routing logic, and HTML/CSS templates
 ├── requirements.txt                   # Python dependencies with exact version pinning (==)
 ├── .python-version                    # Python version specification (3.12.3) for reproducibility
 ├── kgx-storage-webserver.service      # Systemd unit file for service management
@@ -187,9 +188,12 @@ kgx-storage-webserver/
 ├── nginx-config                       # Nginx reverse proxy configuration template
 ├── .gitignore                         # Git exclusion rules (virtual env, cache files, etc.)
 ├── public/                            # Static assets served by Nginx
-│   └── ncats-banner.png              # NCATS Translator project banner image
+│   ├── ncats-banner.png              # NCATS Translator project banner image
+│   └── favicon.png                   # Site favicon
 └── README.md                          # Documentation (this file)
 ```
+
+**Application Structure**: The `web_server.py` file contains the complete Flask application in a single file. The top portion defines routing logic, S3 integration functions, and utility functions. The bottom portion contains HTML/CSS templates as Python string literals for the directory browser, JSON viewer, and documentation page. This single-file structure simplifies deployment and maintenance.
 
 ---
 
@@ -438,9 +442,12 @@ This section documents the production deployment at https://kgx-storage.rtx.ai, 
 The web interface provides multiple URL endpoints for different operations:
 
 - **Main site**: https://kgx-storage.rtx.ai (root directory listing)
-- **Browse folders**: `https://kgx-storage.rtx.ai/?path=<folder-path>` (navigate to subdirectories)
+- **Browse folders**: `https://kgx-storage.rtx.ai/<folder-path>/` (navigate to subdirectories using clean URLs, e.g., `/releases/alliance/latest/`)
 - **View JSON**: `https://kgx-storage.rtx.ai/view/<s3-key>` (display JSON files with syntax highlighting)
 - **Download file**: `https://kgx-storage.rtx.ai/download/<s3-key>` (generate presigned S3 URL and download)
+- **Documentation**: `https://kgx-storage.rtx.ai/docs` (file access documentation with URL examples)
+
+**URL Structure**: The application uses clean URL paths for directory browsing. Legacy query parameter URLs (`/?path=...`) are automatically redirected to clean URLs (e.g., `/?path=releases/` → `/releases/`) to maintain backward compatibility while providing cleaner, more intuitive URLs.
 
 ### Download Methods
 
