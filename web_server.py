@@ -6,6 +6,7 @@ Run this on the EC2 instance to serve files via http://kgx-storage.rtx.ai
 
 import boto3
 import json
+import os
 from flask import Flask, render_template_string, request, redirect, send_from_directory
 from botocore.exceptions import ClientError
 from pathlib import Path
@@ -14,6 +15,31 @@ app = Flask(__name__)
 BUCKET_NAME = "translator-ingests"
 S3_CLIENT = boto3.client("s3")
 PUBLIC_DIR = Path(__file__).parent / "public"
+METRICS_FILE = Path(__file__).parent / "metrics.json"
+
+# Load precomputed metrics
+_metrics_data = {}
+
+
+def load_metrics():
+    """Load precomputed metrics from JSON file."""
+    global _metrics_data
+    try:
+        if METRICS_FILE.exists():
+            with open(METRICS_FILE, "r") as f:
+                data = json.load(f)
+                _metrics_data = data.get("metrics", {})
+                print(f"Loaded metrics for {len(_metrics_data)} folders (computed at {data.get('computed_at', 'unknown')})")
+        else:
+            print(f"Warning: Metrics file not found at {METRICS_FILE}")
+            print("Run 'python compute_metrics.py' to generate metrics for faster performance")
+    except Exception as e:
+        print(f"Error loading metrics: {e}")
+        _metrics_data = {}
+
+
+# Load metrics on startup
+load_metrics()
 
 
 def format_size(size_bytes):
@@ -29,7 +55,16 @@ def format_size(size_bytes):
 
 
 def get_folder_stats(prefix):
-    """Get total size and file count for a folder."""
+    """Get folder statistics from precomputed metrics file.
+
+    Falls back to live S3 API call if metrics not available.
+    """
+    # Try precomputed metrics first
+    if prefix in _metrics_data:
+        return _metrics_data[prefix]
+
+    # Fallback to live S3 API call (slow path)
+    print(f"Warning: No precomputed metrics for {prefix}, falling back to S3 API")
     paginator = S3_CLIENT.get_paginator("list_objects_v2")
     total_size = 0
     file_count = 0
@@ -277,6 +312,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="/public/favicon.png">
     <title>{{ path or '/' }} - Translator Ingests</title>
     <style>
         :root {
@@ -622,6 +658,7 @@ JSON_VIEWER_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="/public/favicon.png">
     <title>{{ file_name }} - Translator Ingests</title>
     <style>
         :root {
@@ -872,6 +909,7 @@ DOCS_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="/public/favicon.png">
     <title>Download Files - KGX Storage</title>
     <style>
         :root {
