@@ -242,8 +242,8 @@ def view_json(s3_key):
         file_size = format_size(response['ContentLength'])
         last_modified = response['LastModified'].strftime("%Y-%m-%d %H:%M:%S")
 
-        # Get download URL
-        download_url = get_presigned_url(s3_key)
+        # Get download URL - use /download/ route for consistency with other file downloads
+        download_url = f"/download/{s3_key}"
 
         # Get parent path for back button
         parent_path = '/'.join(s3_key.split('/')[:-1])
