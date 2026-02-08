@@ -1,72 +1,84 @@
 # KGX Storage Web Server
 
-Web interface for browsing and downloading KGX (Knowledge Graph Exchange) files from S3 storage.
+A website for browsing and downloading KGX (Knowledge Graph Exchange) files from S3. No AWS login needed.
 
-**Live Site**: https://kgx-storage.rtx.ai
+Live site: https://kgx-storage.rtx.ai
 
----
+## Summary
+
+KGX Storage is a small web app. It lets anyone browse and download KGX files from the S3 bucket called `translator-ingests`. The data is built by a different repo (translator-ingests). This repo is only the website.
+
+What the site does:
+- Browse folders and files like a file manager. URLs look like `/releases/alliance/latest/`.
+- Download files. The server creates temporary download links that last 1 hour.
+- View JSON files in the browser with formatting.
+- A docs page with copy-paste commands for curl, wget, and AWS CLI.
+
+How it works: Your browser talks to Nginx over HTTPS. Nginx forwards to the Flask app. The Flask app talks to S3 with boto3. Folder sizes and file counts are precomputed into a file called `metrics.json` so pages load fast. You can run a cron job to refresh that file when new data is added.
+
+Important paths:
+- App lives at `/home/ubuntu/kgx-storage-webserver/`
+- Systemd service name is `kgx-storage-webserver`. Its config file is in the repo and gets copied to `/etc/systemd/system/`.
+- Logs: `/var/log/kgx-storage/` (access.log and error.log)
+- Nginx config: copy `nginx-config` from the repo to `/etc/nginx/sites-available/kgx-storage`
+- The metrics cache is `metrics.json` in the app folder. The script `compute_metrics.py` creates it. The script `update_metrics.sh` can run in cron to refresh it and tell Gunicorn to reload.
+
+Setup in short: Clone the repo. Make a Python venv and install from requirements.txt. Run `sudo ./setup-webserver-service.sh`. Set up Nginx using the repo’s nginx-config. Run certbot for kgx-storage.rtx.ai. Run `compute_metrics.py` once so the site has folder stats. Optionally add a cron job for `update_metrics.sh`. The EC2 instance needs an IAM role that can read from S3, and the domain must point to the instance’s IP.
 
 ## Overview
 
-This web server provides public HTTP access to Knowledge Graph Exchange (KGX) files produced by the NCATS Biomedical Data Translator project. The service enables the DOGSURF team and other Translator consortium members to browse and download processed knowledge graph outputs stored in Amazon S3.
+This server gives people HTTP access to KGX files from the NCATS Biomedical Data Translator project. Anyone can browse and download the knowledge graph data stored in Amazon S3.
 
-The system architecture separates data processing from data access: the data processing pipeline resides in the main `translator-ingests` repository, while this repository contains only the web interface layer. This separation of concerns allows independent development and deployment of the pipeline and web interface components.
+The pipeline that creates the data is in the translator-ingests repo. This repo is just the web interface. That way the data pipeline and the website can be updated separately.
 
-**Data processing pipeline**: https://github.com/NCATSTranslator/translator-ingests/tree/kgx_storage/src/translator_ingest/util/storage
-
----
+Data pipeline code: https://github.com/NCATSTranslator/translator-ingests/tree/kgx_storage/src/translator_ingest/util/storage
 
 ## Features
 
-- **Browse S3 bucket folders and files**: Provides a hierarchical directory interface for navigating the S3 bucket structure using clean URL paths (e.g., `/releases/alliance/latest/`). Users can explore folder hierarchies without requiring direct S3 access or AWS credentials. Legacy query parameter URLs (`/?path=...`) are automatically redirected to clean URLs for backward compatibility.
-- **Download files via presigned URLs (1-hour expiration)**: Generates temporary authenticated S3 URLs that enable public downloads without exposing permanent credentials. The 1-hour expiration provides security while allowing sufficient time for downloads.
-- **JSON viewer with syntax highlighting for metadata files**: Displays JSON metadata files (such as `graph-metadata.json`) directly in the browser with syntax highlighting and formatting. This eliminates the need to download files just to inspect their contents. Includes a download button for saving the file locally.
-- **Documentation page**: Provides comprehensive documentation with URL examples for downloading files via HTTPS (curl, wget) and direct S3 access (AWS CLI). Includes examples for common file paths and archive extraction instructions.
-- **HTTPS with SSL certificate management via Let's Encrypt**: Provides encrypted connections for data security. Let's Encrypt certificates are free and automatically renewed, eliminating manual certificate management.
-- **Public read-only access**: No authentication is required, enabling open access to research data for the Translator consortium and broader scientific community.
-
----
+- **Browse the bucket.** You see folders and files in a list. You click to go deeper. URLs use paths like `/releases/alliance/latest/`. Old-style URLs with `?path=...` still work. They redirect to the new path-style URLs.
+- **Download files.** The server creates temporary S3 links so you can download without AWS credentials. Links expire after 1 hour.
+- **View JSON in the browser.** Open a JSON file and it shows formatted with syntax highlighting. You can download it from there too.
+- **Docs page.** Lists commands for downloading with curl, wget, and AWS CLI. Includes common paths and how to extract .tar.zst archives.
+- **HTTPS.** SSL is handled by Let's Encrypt. Certificates renew automatically.
+- **No login.** The site is read-only and public. Anyone can use it.
 
 ## Architecture
 
-```
-User Browser
-    ↓ HTTPS (port 443)
-Nginx (reverse proxy + SSL termination)
-    ↓ HTTP (localhost:5000)
-Flask + Gunicorn Web Server
-    ↓ AWS SDK (boto3)
-S3 Bucket (translator-ingests)
-```
+Traffic flow:
 
-**Components:**
-- **Nginx**: Handles incoming HTTPS connections on port 443, performs SSL/TLS termination (decryption), and forwards requests to the Flask application on localhost:5000. This separation allows Nginx to efficiently handle connection management, static file serving, and SSL processing while Flask focuses on application logic.
-- **Flask/Gunicorn**: Flask provides the web application framework for routing and S3 integration. The application implements clean URL routing where directory paths are embedded directly in the URL structure (e.g., `/releases/alliance/latest/`) rather than using query parameters. Route ordering ensures specific endpoints (`/view/`, `/download/`, `/docs/`, `/public/`) are matched before the catch-all directory browsing route. Gunicorn serves as the WSGI (Web Server Gateway Interface) server that runs multiple Flask worker processes for concurrent request handling. Gunicorn is production-grade and more robust than Flask's development server.
-- **S3**: Amazon S3 bucket (`translator-ingests`) stores the KGX output files. Files are accessed via presigned URLs with 1-hour expiration, which provide temporary authenticated access without exposing permanent credentials.
-- **IAM Role**: EC2 instance-attached IAM role provides credentials for S3 API calls via the instance metadata service (http://169.254.169.254). This eliminates the need for hardcoded credentials and follows AWS security best practices.
+1. User hits the site over HTTPS (port 443).
+2. Nginx receives it, does SSL, and forwards to the Flask app on localhost port 5000.
+3. The Flask app (run by Gunicorn) handles the request and calls S3 with boto3 when it needs to list or get files.
+4. S3 holds the actual KGX files in the bucket `translator-ingests`.
 
----
+Nginx: Handles HTTPS and passes requests to Flask. Good at connections and SSL.
+
+Flask and Gunicorn: Flask has the routes and S3 logic. Gunicorn runs multiple workers so the app can handle several requests at once. Fixed routes are `/docs/` and `/public/`. A catch-all route handles everything else: paths like `/releases/alliance/latest/` list a folder; paths like `/releases/alliance/latest/graph-metadata.json` return the file (JSON as body or download for other types). Adding `?view` to a JSON file URL shows the HTML viewer. Legacy `/view/` and `/download/` URLs are no longer routed and return 404.
+
+S3: The bucket `translator-ingests` stores the files. The app uses presigned URLs for downloads so users never need AWS keys.
+
+IAM: The EC2 instance has an IAM role. The app gets credentials from the instance metadata service. No keys are stored in the code.
 
 ## Requirements
 
-### Infrastructure
-- **EC2 instance running Ubuntu/Debian (t3.medium)**: The web server requires a Linux environment with systemd for process management. The t3.medium instance type (2 vCPU, 4 GB RAM) provides sufficient resources for the Flask application and Nginx while remaining cost-effective. Ubuntu/Debian distributions include the required package repositories for Nginx, Certbot, and Python 3.12.
-- **IAM role with S3 read permissions**: The EC2 instance requires an attached IAM role with `s3:GetObject` (read individual files) and `s3:ListBucket` (list directory contents) permissions for the `translator-ingests` bucket. This enables boto3 to authenticate via the instance metadata service without requiring hardcoded credentials.
-- **Elastic IP allocated and associated**: An Elastic IP provides a static public IP address that persists across instance restarts. This is necessary for DNS configuration and SSL certificate validation.
-- **Domain `kgx-storage.rtx.ai` pointing to Elastic IP**: DNS A record mapping the domain to the Elastic IP enables HTTPS certificate issuance via Let's Encrypt, which requires domain validation.
-- **Security Group allowing ports 22 (SSH), 80 (HTTP), 443 (HTTPS)**: AWS Security Group acts as a virtual firewall. Port 22 enables remote administration, port 80 is required for Let's Encrypt certificate challenges and HTTP-to-HTTPS redirection, and port 443 is the standard HTTPS port for public access.
+You need:
 
-### Software
-- **Python 3.12.3** (specified in `.python-version`): The exact Python version is pinned to ensure consistent behavior across deployments. All dependencies in `requirements.txt` have been tested with this version.
-- **Nginx**: Reverse proxy server for SSL termination, connection management, and static file serving. Nginx is more efficient than Python-based web servers for these tasks.
-- **Certbot**: ACME client for automated SSL certificate provisioning and renewal from Let's Encrypt Certificate Authority. Certificates are free and automatically renewed before expiration.
-- **Python packages with pinned versions** (in `requirements.txt`): All dependencies use exact version pinning (`==` operator) to ensure reproducible deployments and prevent unexpected breakage from dependency updates.
+- An EC2 instance (Ubuntu or Debian). Something like t3.medium (2 vCPU, 4 GB RAM) is enough. It needs systemd.
+- An IAM role on that instance with permission to read from the bucket: `s3:GetObject` and `s3:ListBucket` on `translator-ingests`.
+- An Elastic IP so the instance has a fixed public IP.
+- The domain kgx-storage.rtx.ai pointing at that IP (DNS A record).
+- Security group open for: 22 (SSH), 80 (HTTP, for certbot and redirect), 443 (HTTPS).
 
----
+Software on the server:
 
-## Installation (Fresh EC2 Setup)
+- Python 3.12.3 (see .python-version). Same version everywhere keeps things predictable.
+- Nginx (reverse proxy and SSL).
+- Certbot (gets and renews Let's Encrypt certificates).
+- Python packages from requirements.txt (versions are pinned).
 
-### 1. Clone This Repository
+## Installation (Fresh EC2)
+
+### 1. Clone the repo
 
 ```bash
 cd /home/ubuntu
@@ -74,23 +86,18 @@ git clone https://github.com/RTXteam/kgx-storage.git kgx-storage-webserver
 cd kgx-storage-webserver
 ```
 
-**Purpose**: Download the web server source code to the EC2 instance. The repository is cloned into `/home/ubuntu/kgx-storage-webserver` to establish a consistent deployment path that is referenced by the systemd service configuration.
+This puts the code in `/home/ubuntu/kgx-storage-webserver`. The systemd service expects that path.
 
-### 2. Install System Dependencies
+### 2. Install system packages
 
 ```bash
 sudo apt update
 sudo apt install -y nginx certbot python3-certbot-nginx python3.12 python3.12-venv python3-pip
 ```
 
-**Purpose**: Install required system-level packages that cannot be provided through Python's package manager.
-- `nginx`: Reverse proxy server that handles HTTPS termination and forwards requests to the Flask application
-- `certbot` and `python3-certbot-nginx`: Automated SSL certificate provisioning and renewal from Let's Encrypt Certificate Authority
-- `python3.12`: Specific Python interpreter version required for dependency compatibility (pinned version ensures reproducibility)
-- `python3.12-venv`: Virtual environment module for isolated Python dependency management
-- `python3-pip`: Python package installer
+You get Nginx, Certbot, Python 3.12, venv, and pip.
 
-### 3. Set Up Python Virtual Environment
+### 3. Python virtual environment
 
 ```bash
 python3.12 -m venv .venv
@@ -99,13 +106,9 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-**Purpose**: Create an isolated Python environment to prevent dependency conflicts with system packages.
-- `python3.12 -m venv .venv`: Creates a virtual environment using the exact Python version specified in `.python-version`
-- `source .venv/bin/activate`: Activates the environment so subsequent pip installations are isolated
-- `pip install --upgrade pip`: Updates pip to the latest version for improved dependency resolution
-- `pip install -r requirements.txt`: Installs all Python dependencies with pinned versions (== operator) to ensure exact reproducibility across deployments
+This keeps the app’s dependencies separate from the system. All installs go into `.venv`.
 
-### 4. Set Up the Web Service
+### 4. Install and start the web service
 
 ```bash
 cd /home/ubuntu/kgx-storage-webserver
@@ -113,10 +116,7 @@ sudo ./setup-webserver-service.sh
 sudo systemctl status kgx-storage-webserver
 ```
 
-**Purpose**: Configure the Flask application as a systemd service for automatic startup and process management.
-- The setup script installs `kgx-storage-webserver.service` to `/etc/systemd/system/`, enabling the web server to start automatically on system boot and restart on failure
-- Systemd provides process supervision, logging via journald, and standardized service management commands
-- `systemctl status` verifies the service is active and running without errors
+The script copies the systemd unit file and starts the service. Check status to make sure it’s running.
 
 ### 5. Configure Nginx
 
@@ -129,263 +129,170 @@ sudo systemctl restart nginx
 sudo systemctl enable nginx
 ```
 
-**Purpose**: Configure Nginx as a reverse proxy to handle external HTTPS traffic and forward requests to the Flask application.
-- Nginx provides SSL termination, static file serving, and connection handling that are more efficient than pure Python implementations
-- The sites-available/sites-enabled pattern is a Debian convention that separates configuration storage from active configurations
-- Removing the default site prevents port conflicts on port 80
-- `nginx -t` validates the configuration syntax before applying changes
-- `systemctl enable` ensures Nginx starts automatically on system boot
+Nginx now proxies to the Flask app. The default site is removed so port 80 is free. `nginx -t` checks the config before you restart.
 
-### 6. Set Up HTTPS with Let's Encrypt
+### 6. HTTPS with Let's Encrypt
 
 ```bash
 sudo certbot --nginx -d kgx-storage.rtx.ai
 sudo certbot renew --dry-run
 ```
 
-**Purpose**: Provision and configure SSL/TLS certificates for encrypted HTTPS communication.
-- Certbot automatically obtains free certificates from Let's Encrypt and modifies the Nginx configuration to use them
-- The `--nginx` flag integrates with the existing Nginx configuration
-- Let's Encrypt certificates expire after 90 days; Certbot installs a systemd timer for automatic renewal
-- `--dry-run` verifies the renewal process works correctly without actually renewing the certificate
+Certbot gets a certificate and configures Nginx. The dry run checks that renewal will work later.
 
-### 7. Configure Security Group
+### 7. Security group
 
-Configure EC2 Security Group inbound rules in the AWS Console:
+In the AWS console, open these ports:
 
-| Type  | Protocol | Port | Source    | Purpose                          |
-|-------|----------|------|-----------|----------------------------------|
-| SSH   | TCP      | 22   | Your IP   | Remote administration access     |
-| HTTP  | TCP      | 80   | 0.0.0.0/0 | HTTP to HTTPS redirect (Certbot) |
-| HTTPS | TCP      | 443  | 0.0.0.0/0 | Public web access                |
+| Type  | Port | Source    | Why |
+|-------|------|-----------|-----|
+| SSH   | 22   | Your IP   | So you can log in |
+| HTTP  | 80   | 0.0.0.0/0 | Certbot and redirect to HTTPS |
+| HTTPS | 443  | 0.0.0.0/0 | The actual site |
 
-**Purpose**: Configure AWS firewall rules to control network access to the EC2 instance.
-- Port 22 should be restricted to your administrative IP for security
-- Port 80 is required for Certbot's HTTP-01 challenge during certificate issuance and for automatic HTTPS redirection
-- Port 443 is the standard HTTPS port for public web access
+Restrict SSH to your IP if you can.
 
-### 8. Verify Setup
+### 8. Generate metrics (faster browsing)
+
+```bash
+cd /home/ubuntu/kgx-storage-webserver
+source .venv/bin/activate
+python compute_metrics.py
+```
+
+This builds `metrics.json` with folder sizes and file counts. The web app reads this so it doesn’t have to ask S3 for every folder. Run it once after setup. You can also run `update_metrics.sh` from cron (for example every hour) to refresh it.
+
+### 9. Check that it works
 
 ```bash
 curl -I https://kgx-storage.rtx.ai
 ```
 
-**Purpose**: Confirm the web server is accessible over HTTPS and returning valid responses. A successful response (HTTP 200 or 302) indicates that Nginx, SSL certificates, Flask application, and S3 connectivity are all functioning correctly.
+You want a 200 or 302. That means Nginx, SSL, and the app are all working.
 
----
+## File structure
 
-## File Structure
+What’s in the repo:
 
-Repository structure and purpose of each file:
+- `web_server.py` – Flask app. Routes, S3 calls, and the HTML for the browser, JSON viewer, and docs live here.
+- `compute_metrics.py` – Script that scans the bucket and writes folder stats to `metrics.json`.
+- `update_metrics.sh` – Runs compute_metrics.py and sends HUP to Gunicorn so workers reload. Use in cron.
+- `metrics.json` – Created by compute_metrics.py. Not in git. Makes folder listing fast.
+- `requirements.txt` – Python dependencies (pinned versions).
+- `.python-version` – Says to use Python 3.12.3.
+- `kgx-storage-webserver.service` – Systemd unit. Installed by setup-webserver-service.sh.
+- `setup-webserver-service.sh` – Installs the service and starts it.
+- `nginx-config` – Copy this to Nginx’s sites-available.
+- `.gitignore` – Tells git what not to track.
+- `public/` – Static files (e.g. ncats-banner.png, favicon.png). Served by the app.
+- `README.md` – This file.
 
-```
-kgx-storage-webserver/
-├── web_server.py                      # Flask application with S3 integration, routing logic, and HTML/CSS templates
-├── requirements.txt                   # Python dependencies with exact version pinning (==)
-├── .python-version                    # Python version specification (3.12.3) for reproducibility
-├── kgx-storage-webserver.service      # Systemd unit file for service management
-├── setup-webserver-service.sh         # Shell script to install and enable the systemd service
-├── nginx-config                       # Nginx reverse proxy configuration template
-├── .gitignore                         # Git exclusion rules (virtual env, cache files, etc.)
-├── public/                            # Static assets served by Nginx
-│   ├── ncats-banner.png              # NCATS Translator project banner image
-│   └── favicon.png                   # Site favicon
-└── README.md                          # Documentation (this file)
-```
+## Service management
 
-**Application Structure**: The `web_server.py` file contains the complete Flask application in a single file. The top portion defines routing logic, S3 integration functions, and utility functions. The bottom portion contains HTML/CSS templates as Python string literals for the directory browser, JSON viewer, and documentation page. This single-file structure simplifies deployment and maintenance.
+The app runs as a systemd service named `kgx-storage-webserver`.
 
----
-
-## Service Management
-
-### Systemd Commands
-
-Systemd manages the Flask application as a background service with automatic restarts and logging.
-
+Check status:
 ```bash
-# Check status - shows if service is running, recent log entries, and PID
 sudo systemctl status kgx-storage-webserver
+```
 
-# Stop/Start/Restart
-sudo systemctl stop kgx-storage-webserver      # Stop the service
-sudo systemctl start kgx-storage-webserver     # Start the service
-sudo systemctl restart kgx-storage-webserver   # Restart (use after code changes)
+Stop, start, or restart:
+```bash
+sudo systemctl stop kgx-storage-webserver
+sudo systemctl start kgx-storage-webserver
+sudo systemctl restart kgx-storage-webserver
+```
 
-# View logs (real-time) - continuously displays new log entries as they occur
+Watch logs live:
+```bash
 sudo journalctl -u kgx-storage-webserver -f
+```
 
-# View last 100 lines - displays recent log history for debugging
+Last 100 lines:
+```bash
 sudo journalctl -u kgx-storage-webserver -n 100
-
-# Enable/Disable auto-start on boot
-sudo systemctl enable kgx-storage-webserver    # Start automatically after system boot
-sudo systemctl disable kgx-storage-webserver   # Prevent automatic startup
 ```
 
-### Nginx Commands
-
-Nginx configuration changes require validation and reloading to take effect.
-
+Turn on or off start at boot:
 ```bash
-# Test configuration - validates syntax before applying changes
-# Always run this before restarting Nginx to prevent configuration errors
+sudo systemctl enable kgx-storage-webserver
+sudo systemctl disable kgx-storage-webserver
+```
+
+Nginx: After editing config, test then reload:
+```bash
 sudo nginx -t
-
-# Reload (no downtime) - applies configuration changes without dropping connections
-# Preferred method for configuration updates
 sudo systemctl reload nginx
-
-# Restart - full stop and start cycle (brief downtime)
-# Use only when reload is insufficient
-sudo systemctl restart nginx
-
-# Check status - shows if Nginx is running and listening on ports 80/443
-sudo systemctl status nginx
 ```
 
-### SSL Certificate Management
-
-Let's Encrypt certificates expire after 90 days. Certbot installs a systemd timer that automatically renews certificates when they have 30 days or less remaining.
-
+Certificates: They renew automatically. To check or force renew:
 ```bash
-# Check certificate expiry - displays certificate validity dates
-# Renewal is recommended when less than 30 days remain
 sudo certbot certificates
-
-# Manually renew certificates - forces immediate renewal
-# Normally not needed due to automatic renewal
 sudo certbot renew
-
-# Test renewal (dry run) - validates the renewal process without actually renewing
-# Useful for verifying automatic renewal will work
 sudo certbot renew --dry-run
 ```
 
----
+## Log files
 
-## Log Files
+- App: `/var/log/kgx-storage/access.log` and `error.log`
+- Service: `sudo journalctl -u kgx-storage-webserver`
+- Nginx: `/var/log/nginx/access.log` and `error.log`
 
-Logs are stored in multiple locations for different system components:
-
-- **Application logs**: `/var/log/kgx-storage/access.log` (HTTP request log), `/var/log/kgx-storage/error.log` (Python exceptions and errors)
-  - Created by Gunicorn for application-level logging
-- **Systemd logs**: `journalctl -u kgx-storage-webserver`
-  - Systemd journal contains service startup/shutdown events and stdout/stderr from the application
-  - Persists across service restarts and system reboots
-- **Nginx logs**: `/var/log/nginx/access.log` (all incoming HTTPS requests), `/var/log/nginx/error.log` (Nginx-level errors)
-  - Useful for diagnosing SSL issues, connection problems, and reverse proxy errors
-
----
-
-## Updating the Application
-
-To deploy code changes from the Git repository to the running service:
+## Deploying code changes
 
 ```bash
 cd /home/ubuntu/kgx-storage-webserver
-git pull                                      # Download latest code from GitHub
-sudo systemctl restart kgx-storage-webserver # Restart service to load new code
-sudo systemctl status kgx-storage-webserver  # Verify service restarted successfully
+git pull
+sudo systemctl restart kgx-storage-webserver
+sudo systemctl status kgx-storage-webserver
 ```
 
-**Note**: Changes to Python code require a service restart. Changes to Nginx configuration require `sudo nginx -t && sudo systemctl reload nginx`.
-
----
+Python changes need a restart. Nginx config changes need `sudo nginx -t` then `sudo systemctl reload nginx`.
 
 ## Troubleshooting
 
-### Service Won't Start
+**Service won’t start**
 
-**Symptoms**: The web server fails to start or crashes immediately after starting.
-
-**Diagnostic steps**:
+Look at the logs:
 ```bash
-# Check detailed logs - displays the last 50 log entries from the systemd journal
-# Look for Python exceptions, port conflicts, or missing dependencies
 sudo journalctl -u kgx-storage-webserver -n 50
+```
 
-# Verify port 5000 is available - checks if another process is using port 5000
-# If another process is listed, you'll need to stop it or change Flask's port
+See if something else is on port 5000:
+```bash
 sudo ss -tulpn | grep 5000
+```
 
-# Check Python dependencies - attempts to import required modules
-# If import fails, a module is missing or incompatible; reinstall from requirements.txt
+Check that Python can load the app:
+```bash
 cd /home/ubuntu/kgx-storage-webserver
 source .venv/bin/activate
 python -c "import flask, boto3, gunicorn"
 ```
 
-### 502 Bad Gateway
+**502 Bad Gateway**
 
-**Symptoms**: Nginx returns "502 Bad Gateway" error when accessing the site.
+Nginx can’t reach the app. Usually the app isn’t running. Run `sudo systemctl status kgx-storage-webserver` and `sudo journalctl -u kgx-storage-webserver -n 50` to see why.
 
-**Cause**: Nginx cannot connect to the Flask application on localhost:5000, typically because the Flask service is not running or crashed.
+**SSL problems**
 
-**Diagnostic steps**:
+Check certs: `sudo certbot certificates`. Test Nginx: `sudo nginx -t`. Look at the Nginx site config if something is wrong.
+
+**JSON opens as download instead of viewer**
+
+Restart the app so it picks up the routes: `sudo systemctl restart kgx-storage-webserver`.
+
+**S3 Access Denied**
+
+The instance probably doesn’t have an IAM role or the role can’t read the bucket. Check:
 ```bash
-# Check if the Flask service is running
-sudo systemctl status kgx-storage-webserver
-
-# View recent error logs to identify why the service stopped
-sudo journalctl -u kgx-storage-webserver -n 50
-```
-
-### SSL Certificate Issues
-
-**Symptoms**: Browser shows SSL certificate errors, or HTTPS is not working.
-
-**Diagnostic steps**:
-```bash
-# Check certificate validity and expiration date
-# Certificates should auto-renew; if expired, run 'sudo certbot renew'
-sudo certbot certificates
-
-# Test Nginx configuration syntax - identifies configuration errors before applying
-sudo nginx -t
-
-# Review Nginx SSL configuration - verify certificate paths are correct
-sudo cat /etc/nginx/sites-available/kgx-storage
-```
-
-### JSON Viewer Not Working
-
-**Symptoms**: JSON files download instead of displaying in the browser viewer.
-
-**Cause**: The Flask application may need to reload the updated routing logic.
-
-**Solution**:
-```bash
-# Restart the Flask service to reload code changes
-sudo systemctl restart kgx-storage-webserver
-```
-
-### S3 Access Denied
-
-**Symptoms**: Application returns "Access Denied" errors when trying to list or download files.
-
-**Cause**: The EC2 instance IAM role is missing or lacks required S3 permissions.
-
-**Diagnostic steps**:
-```bash
-# Check if IAM role is attached to the instance
-# This should return a role name; if empty, no IAM role is attached
 curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/
-
-# If a role name appears, you can retrieve temporary credentials (verify they exist):
-ROLE_NAME=$(curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/)
-curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE_NAME
 ```
+If that returns a role name, the role is attached. Then in AWS make sure that role has `s3:GetObject` and `s3:ListBucket` on the `translator-ingests` bucket.
 
-**Solution**: Verify the IAM role attached to the EC2 instance includes the policy documented in the IAM Permissions section.
+## IAM permissions
 
----
-
-## IAM Permissions
-
-The EC2 instance requires an IAM role with the following policy attached. This policy grants the minimum permissions necessary for the web server to function (principle of least privilege).
-
-**Required IAM policy for EC2 instance role:**
+The EC2 instance role needs this policy (or equivalent):
 
 ```json
 {
@@ -406,153 +313,90 @@ The EC2 instance requires an IAM role with the following policy attached. This p
 }
 ```
 
-**Permission breakdown:**
-- `s3:GetObject` on `arn:aws:s3:::translator-ingests/*`: Allows reading individual file objects from the bucket. Required for generating presigned download URLs and viewing JSON files.
-- `s3:ListBucket` on `arn:aws:s3:::translator-ingests`: Allows listing directory contents (objects with common prefixes). Required for displaying folder contents in the web interface.
+- `s3:GetObject` on the bucket’s objects: read files (for downloads and JSON viewer).
+- `s3:ListBucket` on the bucket: list prefixes so we can show folders.
 
-**Security considerations:**
-- No write permissions (`s3:PutObject`, `s3:DeleteObject`) are granted, enforcing read-only access
-- Permissions are scoped exclusively to the `translator-ingests` bucket
-- Credentials are provided via the instance metadata service (http://169.254.169.254), not hardcoded in the application
-
----
+No write actions. Credentials come from the instance metadata, not from the code.
 
 ## Development
 
-For local development and testing, you can run Flask's development server directly without systemd or Nginx. The development server includes automatic code reloading and detailed error pages.
+To run the app locally without Nginx or systemd:
 
 ```bash
 cd /home/ubuntu/kgx-storage-webserver
-source .venv/bin/activate       # Activate the virtual environment
-python web_server.py             # Run Flask development server
+source .venv/bin/activate
+python web_server.py
 ```
 
-Access the development server at http://localhost:5000
+Then open http://localhost:5000. This is single-threaded and not for production. Use it to test changes.
 
-**Important**: The development server is single-threaded and not suitable for production use. It lacks Gunicorn's process management and Nginx's SSL termination. Use this mode only for testing code changes before deploying to production.
+## Production URLs and downloads
 
----
+Site: https://kgx-storage.rtx.ai
 
-## Production
+- Home: https://kgx-storage.rtx.ai
+- Folders: https://kgx-storage.rtx.ai/releases/alliance/latest/ (and similar paths; trailing slash lists the folder)
+- File (canonical): https://kgx-storage.rtx.ai/releases/alliance/latest/graph-metadata.json — returns the file (JSON as response body, other types trigger download)
+- JSON viewer: same path with `?view`, e.g. https://kgx-storage.rtx.ai/releases/alliance/latest/graph-metadata.json?view — shows the HTML viewer
+- Docs: https://kgx-storage.rtx.ai/docs
 
-This section documents the production deployment at https://kgx-storage.rtx.ai, including URL patterns and download methods for accessing KGX files.
+Old links with `?path=...` redirect to the path-style URL. Legacy `/view/` and `/download/` URLs are no longer supported (404).
 
-### Web Interface
+**Downloading without AWS**
 
-The web interface provides multiple URL endpoints for different operations:
+Use the canonical file URL with curl or wget. Always use the `-fL` flags with curl to ensure reliable downloads:
 
-- **Main site**: https://kgx-storage.rtx.ai (root directory listing)
-- **Browse folders**: `https://kgx-storage.rtx.ai/<folder-path>/` (navigate to subdirectories using clean URLs, e.g., `/releases/alliance/latest/`)
-- **View JSON**: `https://kgx-storage.rtx.ai/view/<s3-key>` (display JSON files with syntax highlighting)
-- **Download file**: `https://kgx-storage.rtx.ai/download/<s3-key>` (generate presigned S3 URL and download)
-- **Documentation**: `https://kgx-storage.rtx.ai/docs` (file access documentation with URL examples)
-
-**URL Structure**: The application uses clean URL paths for directory browsing. Legacy query parameter URLs (`/?path=...`) are automatically redirected to clean URLs (e.g., `/?path=releases/` → `/releases/`) to maintain backward compatibility while providing cleaner, more intuitive URLs.
-
-### Download Methods
-
-Three download methods are available, each suited for different use cases:
-
-#### Method 1: HTTPS via Web Interface (Recommended for users without AWS credentials)
-
-This method uses presigned S3 URLs generated by the web server. No AWS credentials are required, making it suitable for public access. The URLs expire after 1 hour for security.
-
-Download individual files using curl:
 ```bash
-# Download a single file
-curl -O https://kgx-storage.rtx.ai/download/releases/alliance/latest/alliance-nodes.tsv.gz
-
-# Download with custom filename
-curl -o myfile.tar.zst https://kgx-storage.rtx.ai/download/releases/alliance/latest/alliance.tar.zst
-
-# Download with progress bar
-curl -# -O https://kgx-storage.rtx.ai/download/releases/alliance/latest/alliance-edges.tsv.gz
+curl -fL -O "https://kgx-storage.rtx.ai/releases/alliance/latest/alliance.tar.zst"
 ```
 
-Download using wget:
+The flags:
+- `-L` follows HTTP redirects (required for the server's routing)
+- `-f` fails on HTTP errors (prevents saving error pages as files)
+- `-O` saves with the remote filename
+
+Without `-L`, curl saves redirect responses instead of the actual file. Without `-f`, curl silently saves HTTP error pages (404, 500, etc.) as if they were valid data, which can corrupt your analysis pipeline.
+
+For wget, redirects are followed by default and errors return non-zero exit codes, so the basic command is sufficient:
+
 ```bash
-# Download a single file
-wget https://kgx-storage.rtx.ai/download/releases/alliance/latest/alliance-nodes.tsv.gz
-
-# Download with custom filename
-wget -O myfile.json https://kgx-storage.rtx.ai/download/releases/alliance/latest/graph-metadata.json
+wget "https://kgx-storage.rtx.ai/releases/alliance/latest/alliance.tar.zst"
 ```
 
-#### Method 2: Direct S3 Access (Requires AWS credentials)
+Examples and more commands are on the /docs page.
 
-This method bypasses the web server and accesses S3 directly. Requires AWS credentials with `s3:GetObject` and `s3:ListBucket` permissions for the `translator-ingests` bucket. This method is more efficient for downloading multiple files or entire directories, and supports advanced features like filtering and synchronization.
+**Downloading with AWS CLI**
 
-Using AWS CLI with read permissions:
-```bash
-# Download single file
-aws s3 cp s3://translator-ingests/releases/alliance/latest/alliance-nodes.tsv.gz .
+If you have credentials that can read the bucket, you can use `aws s3 cp` and `aws s3 sync` on `s3://translator-ingests/`. See the docs page for paths and examples.
 
-# Download entire folder
-aws s3 cp s3://translator-ingests/releases/alliance/latest/ . --recursive
+**Example paths in the bucket**
 
-# Download with include/exclude filters
-aws s3 cp s3://translator-ingests/releases/alliance/latest/ . --recursive --exclude "*" --include "*.json"
+- releases/alliance/latest/alliance.tar.zst
+- releases/alliance/latest/graph-metadata.json
+- releases/reactome/latest/ (and similar)
 
-# Sync folder (only downloads new/changed files)
-aws s3 sync s3://translator-ingests/releases/alliance/latest/ ./local-folder/
-```
+**Metadata and external consistency**
 
-#### Method 3: Programmatic Access via Python
+Use the canonical URL format for any reference to kgx-storage files: path only (e.g. `https://kgx-storage.rtx.ai/releases/alliance/latest/graph-metadata.json`), with optional `?view` for the JSON viewer. Metadata files (e.g. graph-metadata.json), DAWG, or other systems that publish or consume kgx-storage URLs should use this format so "URL in metadata" matches "URL in app" and links work the same everywhere. For version checks (e.g. "is there a new release?"), using metadata (e.g. `release_version` in latest-release.json or `url`/`id` in graph-metadata.json) is more reliable than relying only on the Last-Modified HTTP header.
 
-This method enables automated downloads within Python scripts or applications. The HTTPS approach works without credentials, while the boto3 approach requires AWS credentials but provides more control and efficiency for bulk operations.
+**Edge cases**
 
-```python
-import requests
+- Path that is neither an S3 object nor a prefix (e.g. typo): 404, same HTML response as reserved paths like `/view` or `/download`.
+- Directory path without trailing slash (e.g. `/releases/alliance/latest`): redirect to the same path with trailing slash so the folder listing is shown.
+- Query parameters: only `?view` is significant for JSON viewer; other params (e.g. `?foo=bar`) are ignored. Redirects use the canonical path with no query string.
 
-# Download via HTTPS
-url = "https://kgx-storage.rtx.ai/download/releases/alliance/latest/graph-metadata.json"
-response = requests.get(url)
-with open("graph-metadata.json", "wb") as f:
-    f.write(response.content)
+## Related repos
 
-# Download via boto3 (requires AWS credentials)
-import boto3
-s3 = boto3.client("s3")
-s3.download_file(
-    "translator-ingests",
-    "releases/alliance/latest/graph-metadata.json",
-    "graph-metadata.json"
-)
-```
-
-### Example File Paths
-
-```
-releases/alliance/latest/alliance-nodes.tsv.gz
-releases/alliance/latest/alliance-edges.tsv.gz
-releases/alliance/latest/alliance.tar.zst
-releases/alliance/latest/graph-metadata.json
-releases/reactome/latest/reactome-nodes.tsv.gz
-releases/reactome/latest/reactome-edges.tsv.gz
-```
-
----
-
-## Related Repositories
-
-Main implementation: https://github.com/NCATSTranslator/translator-ingests/tree/kgx_storage
-
-Contains S3 upload logic, EBS cleanup, and pipeline orchestration.
-
----
+Translator-ingests (pipeline that writes the data): https://github.com/NCATSTranslator/translator-ingests/tree/kgx_storage
 
 ## Security
 
-This deployment implements multiple layers of security controls:
-
-- **HTTPS via Let's Encrypt SSL**: All traffic is encrypted using TLS 1.2/1.3 with certificates from Let's Encrypt Certificate Authority. This prevents eavesdropping and man-in-the-middle attacks.
-- **IAM role authentication (no hardcoded credentials)**: AWS credentials are provided via the EC2 instance metadata service rather than stored in configuration files or code. This prevents credential leakage and follows AWS security best practices.
-- **Presigned URLs with 1-hour expiration**: Download URLs include cryptographic signatures that expire after 1 hour, limiting the window for URL sharing or abuse while maintaining public accessibility.
-- **Flask listens on localhost only**: The Flask application binds to 127.0.0.1:5000, making it inaccessible from external networks. Only Nginx can forward requests to it, reducing the attack surface.
-- **Public read-only access**: The service is intentionally designed for public data dissemination. All S3 permissions are read-only, preventing data modification or deletion.
-- **No rate limiting**: Currently not implemented. The public nature of the data and the 1-hour URL expiration provide basic abuse prevention. Rate limiting can be added via Nginx if needed.
-
----
+- HTTPS with Let's Encrypt. Traffic is encrypted.
+- No AWS keys in the app. The instance role is used via metadata.
+- Download links are presigned and expire in 1 hour.
+- The Flask app only listens on the localhost. Only Nginx talks to it from the outside.
+- S3 access is read-only. Nobody can change or delete data through this app.
+- There is no rate limiting. If you need it, you can add it in Nginx.
 
 ## License
 

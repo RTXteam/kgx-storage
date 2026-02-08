@@ -7,7 +7,8 @@ Run this on the EC2 instance to serve files via http://kgx-storage.rtx.ai
 import boto3
 import json
 import os
-from flask import Flask, render_template_string, request, redirect, send_from_directory
+from datetime import timezone
+from flask import Flask, render_template_string, request, redirect, send_from_directory, Response
 from botocore.exceptions import ClientError
 from pathlib import Path
 
@@ -40,6 +41,25 @@ def load_metrics():
 
 # Load metrics on startup
 load_metrics()
+
+# Minimal HTML for 404 (file/prefix not found or reserved path)
+NOT_FOUND_HTML = (
+    "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Not found</title></head>"
+    "<body><h1>Not found</h1><p>The requested path does not exist.</p>"
+    "<p><a href='/'>Browse files</a></p></body></html>"
+)
+
+
+def not_found_response():
+    """Return 404 response (same for missing file/prefix and reserved paths)."""
+    return Response(NOT_FOUND_HTML, status=404, mimetype="text/html")
+
+
+def _http_last_modified(dt):
+    """Format S3 LastModified datetime as HTTP Last-Modified header value."""
+    if dt.tzinfo:
+        dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%a, %d %b %Y %H:%M:%S GMT")
 
 
 def format_size(size_bytes):
@@ -127,6 +147,27 @@ def list_directory(prefix=""):
     files.sort(key=lambda x: x["name"].lower())
 
     return folders, files
+
+
+def s3_head_object(key):
+    """Return S3 object metadata if key exists, else None."""
+    try:
+        return S3_CLIENT.head_object(Bucket=BUCKET_NAME, Key=key)
+    except ClientError:
+        return None
+
+
+def prefix_has_contents(prefix):
+    """Return True if S3 prefix has any objects or common prefixes (directory)."""
+    try:
+        resp = S3_CLIENT.list_objects_v2(
+            Bucket=BUCKET_NAME, Prefix=prefix, Delimiter="/", MaxKeys=1
+        )
+        if resp.get("Contents") or resp.get("CommonPrefixes"):
+            return True
+        return False
+    except ClientError:
+        return False
 
 
 def get_presigned_url(s3_key, expiration=3600):
@@ -218,38 +259,23 @@ def index():
     return browse_directory("")
 
 
-@app.route("/view/<path:s3_key>")
-def view_json(s3_key):
-    """View JSON file with syntax highlighting."""
-    if not s3_key.lower().endswith('.json'):
-        # Non-JSON files go directly to download
-        return redirect(f"/download/{s3_key}")
-
+def _render_json_viewer(s3_key):
+    # Shared logic for HTML JSON viewer (canonical path with ?view)
     try:
-        # Fetch JSON content from S3
         response = S3_CLIENT.get_object(Bucket=BUCKET_NAME, Key=s3_key)
         json_content = response['Body'].read().decode('utf-8')
-
-        # Parse and pretty-print JSON
         try:
             parsed_json = json.loads(json_content)
             formatted_json = json.dumps(parsed_json, indent=2)
         except json.JSONDecodeError:
             formatted_json = json_content
-
-        # Get file metadata
         file_name = s3_key.split('/')[-1]
         file_size = format_size(response['ContentLength'])
         last_modified = response['LastModified'].strftime("%Y-%m-%d %H:%M:%S")
-
-        # Get download URL - use /download/ route for consistency with other file downloads
-        download_url = f"/download/{s3_key}"
-
-        # Get parent path for back button
+        download_url = f"/{s3_key}"
         parent_path = '/'.join(s3_key.split('/')[:-1])
         if parent_path:
             parent_path += '/'
-
         return render_template_string(
             JSON_VIEWER_TEMPLATE,
             file_name=file_name,
@@ -262,15 +288,6 @@ def view_json(s3_key):
         )
     except ClientError as e:
         return f"Error loading file: {e}", 500
-
-
-@app.route("/download/<path:s3_key>")
-def download(s3_key):
-    """Redirect to presigned download URL."""
-    url = get_presigned_url(s3_key)
-    if url:
-        return redirect(url)
-    return "Error generating download URL", 500
 
 
 @app.route("/docs")
@@ -289,21 +306,60 @@ def serve_public(filename):
 def browse_path(folder_path):
     """Browse directory using clean URL path (e.g., /releases/alliance/latest/).
     
-    This catch-all route must come AFTER specific routes like /view/, /download/, /docs/, /public/
-    to ensure those routes are matched first. Flask matches routes in order of definition.
+    This catch-all route must come AFTER specific routes like /docs/, /public/.
+    Legacy /view/ and /download/ paths are not routed; requests to them hit this and 404.
     
-    Note: Paths starting with 'view', 'download', 'docs', or 'public' should not reach here
-    unless they have trailing slashes (which would be incorrect usage).
+    File vs directory (no trailing slash): HEAD the path; if object exists, serve file.
+    If HEAD 404, check if path is a prefix with contents; if so, redirect to path + /
+    (directory path without trailing slash -> redirect to canonical directory URL).
+    If neither object nor prefix exists, return 404. Only ?view is significant;
+    other query params are ignored; redirects use request.path (no query string).
     """
-    # Safety check: don't handle paths that should be specific routes
+    # Safety check: reserve top-level path names (legacy /view, /download and other routes)
     if folder_path.rstrip("/") in ("view", "download", "docs", "public"):
-        return "Not found", 404
-    
-    # Ensure path ends with / for directories
-    if not folder_path.endswith("/"):
-        folder_path += "/"
-    
-    return browse_directory(folder_path)
+        return not_found_response()
+
+    # Path with trailing slash: treat as directory (list prefix)
+    if folder_path.endswith("/"):
+        return browse_directory(folder_path)
+
+    # No trailing slash: may be a file (single S3 object) or directory (prefix)
+    head = s3_head_object(folder_path)
+    if head:
+        # It is a file: serve or show viewer based on ?view only; other params ignored
+        last_modified = _http_last_modified(head["LastModified"])
+        if request.method == "HEAD":
+            # Return headers only (Last-Modified for polling; no body)
+            resp = Response(status=200)
+            resp.headers["Last-Modified"] = last_modified
+            resp.headers["Content-Length"] = str(head["ContentLength"])
+            resp.headers["Content-Type"] = head.get("ContentType") or "application/octet-stream"
+            return resp
+        has_view = "view" in request.args
+        is_json = folder_path.lower().endswith(".json")
+        if has_view:
+            if is_json:
+                return _render_json_viewer(folder_path)
+            # Non-JSON with ?view: redirect to canonical URL (path only, no query)
+            return redirect(request.path, code=302)
+        if is_json:
+            # No ?view, JSON: return body with application/json and Last-Modified
+            response = S3_CLIENT.get_object(Bucket=BUCKET_NAME, Key=folder_path)
+            body = response["Body"].read().decode("utf-8")
+            resp = Response(body, mimetype="application/json")
+            resp.headers["Last-Modified"] = _http_last_modified(response["LastModified"])
+            resp.headers["Content-Length"] = str(len(body.encode("utf-8")))
+            return resp
+        # No ?view, non-JSON: redirect to presigned download URL
+        url = get_presigned_url(folder_path)
+        if url:
+            return redirect(url)
+        return "Error generating download URL", 500
+
+    # HEAD 404: path is not a file; check if it is a prefix (directory without trailing slash)
+    if prefix_has_contents(folder_path + "/"):
+        return redirect("/" + folder_path + "/", code=302)
+    return not_found_response()
 
 
 HTML_TEMPLATE = """
@@ -456,6 +512,26 @@ HTML_TEMPLATE = """
         }
         .tree-icon.folder { color: var(--folder); }
         .tree-icon.file { color: var(--file); }
+        .tree-name-link {
+            color: inherit;
+            text-decoration: none;
+        }
+        .tree-name-link:hover {
+            text-decoration: underline;
+        }
+        .tree-action {
+            font-size: 0.8em;
+            color: var(--accent);
+            text-decoration: none;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: rgba(124, 58, 237, 0.1);
+            margin-left: 8px;
+        }
+        .tree-action:hover {
+            background: rgba(124, 58, 237, 0.2);
+            text-decoration: none;
+        }
         .tree-size, .tree-count, .tree-date {
             font-size: 0.85em;
             color: var(--text-dim);
@@ -618,15 +694,20 @@ HTML_TEMPLATE = """
             {% if files %}
             <div class="section-label">Files</div>
             {% for file in files %}
-            <a href="{% if file.name.lower().endswith('.json') %}/view/{{ file.path }}{% else %}/download/{{ file.path }}{% endif %}" class="tree-item">
+            <div class="tree-item">
                 <span class="tree-name">
-                    <span class="tree-icon file">&#128196;</span>
-                    {{ file.name }}
+                    <a href="/{{ file.path }}" class="tree-name-link">
+                        <span class="tree-icon file">&#128196;</span>
+                        {{ file.name }}
+                    </a>
+                    {% if file.name.lower().endswith('.json') %}
+                    <a href="/{{ file.path }}?view" class="tree-action">View</a>
+                    {% endif %}
                 </span>
                 <span class="tree-size">{{ file.size_display }}</span>
                 <span class="tree-count">-</span>
                 <span class="tree-date">{{ file.modified }}</span>
-            </a>
+            </div>
             {% endfor %}
             {% endif %}
         </div>
@@ -1026,6 +1107,13 @@ DOCS_TEMPLATE = """
             display: block;
             margin: 8px 0;
         }
+        .container code {
+            font-family: monospace;
+            font-size: 0.9em;
+            background: #f4f4f6;
+            padding: 1px 4px;
+            border-radius: 3px;
+        }
         @media (max-width: 768px) {
             .header-content {
                 flex-direction: column;
@@ -1048,17 +1136,31 @@ DOCS_TEMPLATE = """
     <div class="container">
         <p class="intro">Download knowledge graph files via HTTPS or S3. Both methods are publicly accessible without authentication.</p>
 
+        <h2>URL behavior</h2>
+        <p>File URLs use the path to the file (e.g. <code>https://kgx-storage.rtx.ai/releases/alliance/latest/graph-metadata.json</code>). Requesting that URL returns the file: JSON is returned as the response body, other formats trigger a download.</p>
+        <p>For JSON files, appending <code>?view</code> to the same URL (e.g. <code>.../graph-metadata.json?view</code>) opens the HTML viewer in the browser instead of raw JSON. Only <code>?view</code> is significant; other query parameters are ignored. Redirects use the canonical path with no query string.</p>
+        <p>Directory URLs use a trailing slash (e.g. <code>.../latest/</code>). If you request a directory path without a trailing slash, you are redirected to the same path with a trailing slash. Paths that are neither a file nor a directory return 404.</p>
+
         <h2>HTTPS Download</h2>
         
         <div class="cmd-label">Single File</div>
-        <div class="cmd-block" onclick="copy(this)">curl -O "https://kgx-storage.rtx.ai/download/releases/go_cam/latest/go_cam.tar.zst"</div>
+        <div class="cmd-block" onclick="copy(this)">curl -fL -O "https://kgx-storage.rtx.ai/releases/go_cam/latest/go_cam.tar.zst"</div>
         <p class="note">Replace go_cam with your source name</p>
         
         <div class="cmd-label">Specific Version</div>
-        <div class="cmd-block" onclick="copy(this)">curl -O "https://kgx-storage.rtx.ai/download/data/ctd/November_2025/1.0/normalization_2025sep1/merged_nodes.jsonl"</div>
+        <div class="cmd-block" onclick="copy(this)">curl -fL -O "https://kgx-storage.rtx.ai/data/ctd/November_2025/1.0/normalization_2025sep1/merged_nodes.jsonl"</div>
         
         <div class="cmd-label">With wget</div>
-        <div class="cmd-block" onclick="copy(this)">wget "https://kgx-storage.rtx.ai/download/releases/alliance/latest/alliance.tar.zst"</div>
+        <div class="cmd-block" onclick="copy(this)">wget "https://kgx-storage.rtx.ai/releases/alliance/latest/alliance.tar.zst"</div>
+        
+        <h2>Understanding curl Flags</h2>
+        <p style="margin-bottom: 16px;">The recommended curl command uses <code>-fL</code> flags to ensure reliable file downloads:</p>
+        <ul style="margin-left: 24px; margin-bottom: 20px; line-height: 1.8; font-size: 0.9em;">
+            <li><strong><code>-L</code> (Follow redirects):</strong> The server may use HTTP redirects to route requests to the optimal file location. Without this flag, curl saves the redirect response (typically an HTML page) instead of following the redirect to download the actual file.</li>
+            <li><strong><code>-f</code> (Fail on errors):</strong> Returns a non-zero exit code when the server responds with an HTTP error (404, 500, etc.). Without this flag, curl silently saves error pages as if they were valid files, which can corrupt your dataset.</li>
+            <li><strong><code>-O</code> (Save with remote filename):</strong> Saves the file using the same name as on the server.</li>
+        </ul>
+        <p class="note" style="margin-bottom: 30px;">Using <code>curl -fL</code> ensures your download scripts fail safely and prevent corrupted data from entering your analysis pipeline.</p>
 
         <h2>S3 Download</h2>
         <p class="note">Requires AWS CLI installed locally</p>
