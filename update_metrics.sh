@@ -4,10 +4,22 @@
 
 cd /home/ubuntu/kgx-storage-webserver
 
-# Compute new metrics
-/home/ubuntu/kgx-storage-webserver/.venv/bin/python compute_metrics.py >> /var/log/kgx-storage/metrics.log 2>&1
+METRICS_LOG=/var/log/kgx-storage/metrics.log
+VENV_PY=/home/ubuntu/kgx-storage-webserver/.venv/bin/python
+
+# Compute new metrics: always append to log; mirror to terminal when run interactively
+if [ -t 1 ]; then
+  set -o pipefail
+  "$VENV_PY" -u compute_metrics.py 2>&1 | tee -a "$METRICS_LOG"
+else
+  "$VENV_PY" -u compute_metrics.py >> "$METRICS_LOG" 2>&1
+fi
 
 # Reload gunicorn workers gracefully (HUP signal)
 pkill -HUP -f "gunicorn.*web_server:app" 2>&1 | logger -t kgx-metrics
 
-echo "[$(date)] Metrics updated and workers reloaded" >> /var/log/kgx-storage/metrics.log
+if [ -t 1 ]; then
+  echo "[$(date)] Metrics updated and workers reloaded" | tee -a "$METRICS_LOG"
+else
+  echo "[$(date)] Metrics updated and workers reloaded" >> "$METRICS_LOG"
+fi
