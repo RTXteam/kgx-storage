@@ -12,6 +12,8 @@ from flask import Flask, render_template_string, request, redirect, send_from_di
 from botocore.exceptions import ClientError
 from pathlib import Path
 
+from metrics_path_rules import exclude_key_for_folder_modified_date
+
 app = Flask(__name__)
 BUCKET_NAME = "translator-ingests"
 S3_CLIENT = boto3.client("s3")
@@ -88,20 +90,28 @@ def get_folder_stats(prefix):
     paginator = S3_CLIENT.get_paginator("list_objects_v2")
     total_size = 0
     file_count = 0
-    latest_modified = None
+    latest_modified_all = None
+    latest_modified_display = None
 
     for page in paginator.paginate(Bucket=BUCKET_NAME, Prefix=prefix):
         for obj in page.get("Contents", []):
+            key = obj["Key"]
             total_size += obj.get("Size", 0)
             file_count += 1
-            if latest_modified is None or obj["LastModified"] > latest_modified:
-                latest_modified = obj["LastModified"]
+            lm = obj["LastModified"]
+            if latest_modified_all is None or lm > latest_modified_all:
+                latest_modified_all = lm
+            if not exclude_key_for_folder_modified_date(prefix, key):
+                if latest_modified_display is None or lm > latest_modified_display:
+                    latest_modified_display = lm
+
+    chosen_modified = latest_modified_display or latest_modified_all
 
     return {
         "size": total_size,
         "size_display": format_size(total_size),
         "file_count": file_count,
-        "modified": latest_modified.strftime("%Y-%m-%d %H:%M") if latest_modified else "-"
+        "modified": chosen_modified.strftime("%Y-%m-%d %H:%M") if chosen_modified else "-"
     }
 
 
