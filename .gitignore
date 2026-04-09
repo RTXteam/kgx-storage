@@ -41,6 +41,9 @@ Thumbs.db
 # Logs
 *.log
 
+# Rotated metrics snapshots (metrics.json may be kept locally for debugging)
+metrics-*.json
+
 # Environment variables
 .env
 .env.local
