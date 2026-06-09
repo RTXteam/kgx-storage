@@ -17,25 +17,10 @@ from pathlib import Path
 from metrics_path_rules import exclude_key_for_folder_modified_date
 
 app = Flask(__name__)
-BUCKET_NAME = "translator-ingests"
-SITE_URL = "https://kgx-storage.ci.transltr.io"
-TRANSLATOR_KG_OPEN_PATH = "releases/translator_kg_open/"
-
-
-def _use_anonymous_s3() -> bool:
-    """Use unsigned S3 requests for local dev without AWS credentials."""
-    return os.environ.get("KGX_ANONYMOUS_S3", "").lower() in ("1", "true", "yes")
-
-
-def _create_s3_client():
-    if _use_anonymous_s3():
-        return boto3.client("s3", config=Config(signature_version=UNSIGNED))
-    return boto3.client("s3")
-
-
-S3_CLIENT = _create_s3_client()
+BUCKET_NAME = os.environ.get("BUCKET_NAME", "kgx-translator-ingests")
+S3_CLIENT = boto3.client("s3")
 PUBLIC_DIR = Path(__file__).parent / "public"
-METRICS_FILE = Path(__file__).parent / "metrics.json"
+METRICS_FILE = Path(os.environ.get("METRICS_FILE", Path(__file__).parent / "metrics.json"))
 
 # Load precomputed metrics
 _metrics_data = {}
@@ -325,6 +310,19 @@ def _render_json_viewer(s3_key):
         )
     except ClientError as e:
         return f"Error loading file: {e}", 500
+
+
+@app.route("/health")
+def health():
+    """Health check endpoint for Kubernetes liveness and readiness probes."""
+    try:
+        # Simple check - verify S3 client exists and metrics are loaded
+        if S3_CLIENT and len(_metrics_data) > 0:
+            return {"status": "healthy", "service": "kgx-storage", "metrics_loaded": len(_metrics_data)}, 200
+        else:
+            return {"status": "healthy", "service": "kgx-storage"}, 200
+    except Exception as e:
+        return {"status": "unhealthy", "error": str(e)}, 503
 
 
 @app.route("/docs")

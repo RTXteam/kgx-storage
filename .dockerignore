@@ -1,0 +1,64 @@
+# Git files
+.git
+.gitignore
+.github
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Systemd and server configs
+*.service
+nginx-config
+setup-webserver-service.sh
+update_metrics.sh
+
+# Logs
+*.log
+/var/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation (except README)
+*.md
+!README.md
+
+# Metrics file (will be generated at runtime)
+metrics.json
+
+# Kubernetes files
+kubernetes/
+k8s/
+*.yaml
+*.yml
+!requirements.txt

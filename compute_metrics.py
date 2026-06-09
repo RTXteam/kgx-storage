@@ -13,16 +13,15 @@ Usage:
 
 import boto3
 import json
+import os
 import re
 import shutil
 import time
 from datetime import datetime
 from pathlib import Path
 
-from metrics_path_rules import exclude_key_for_folder_modified_date
-
-BUCKET_NAME = "translator-ingests"
-METRICS_FILE = Path(__file__).parent / "metrics.json"
+BUCKET_NAME = os.environ.get("BUCKET_NAME", "kgx-translator-ingests")
+METRICS_FILE = Path(os.environ.get("METRICS_FILE", Path(__file__).parent / "metrics.json"))
 S3_CLIENT = boto3.client("s3")
 
 # Timestamped copies of metrics.json (metrics-YYYYMMDD-HHMMSS.json); keep newest only.
