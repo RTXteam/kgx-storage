@@ -6,7 +6,7 @@ Live site: https://kgx-storage.ci.transltr.io
 
 ## Summary
 
-KGX Storage is a small web app. It lets anyone browse and download KGX files from the S3 bucket called `translator-ingests`. The data is built by a different repo (translator-ingests). This repo is only the website.
+KGX Storage is a small web app. It lets anyone browse and download KGX files from the S3 bucket called `kgx-translator-ingests`. The data is built by a different repo (translator-ingests). This repo is only the website.
 
 What the site does:
 - Browse folders and files like a file manager. URLs look like `/releases/alliance/latest/`.
@@ -49,13 +49,13 @@ Traffic flow:
 1. User hits the site over HTTPS (port 443).
 2. Nginx receives it, does SSL, and forwards to the Flask app on localhost port 5000.
 3. The Flask app (run by Gunicorn) handles the request and calls S3 with boto3 when it needs to list or get files.
-4. S3 holds the actual KGX files in the bucket `translator-ingests`.
+4. S3 holds the actual KGX files in the bucket `kgx-translator-ingests`.
 
 Nginx: Handles HTTPS and passes requests to Flask. Good at connections and SSL.
 
 Flask and Gunicorn: Flask has the routes and S3 logic. Gunicorn runs multiple workers so the app can handle several requests at once. Fixed routes are `/docs/` and `/public/`. A catch-all route handles everything else: paths like `/releases/alliance/latest/` list a folder; paths like `/releases/alliance/latest/graph-metadata.json` return the file (JSON as body or download for other types). Adding `?view` to a JSON file URL shows the HTML viewer. Legacy `/view/` and `/download/` URLs are no longer routed and return 404.
 
-S3: The bucket `translator-ingests` stores the files. The app uses presigned URLs for downloads so users never need AWS keys.
+S3: The bucket `kgx-translator-ingests` stores the files. The app uses presigned URLs for downloads so users never need AWS keys.
 
 IAM: The EC2 instance has an IAM role. The app gets credentials from the instance metadata service. No keys are stored in the code.
 
@@ -64,7 +64,7 @@ IAM: The EC2 instance has an IAM role. The app gets credentials from the instanc
 You need:
 
 - An EC2 instance (Ubuntu or Debian). Something like t3.medium (2 vCPU, 4 GB RAM) is enough. It needs systemd.
-- An IAM role on that instance with permission to read from the bucket: `s3:GetObject` and `s3:ListBucket` on `translator-ingests`.
+- An IAM role on that instance with permission to read from the bucket: `s3:GetObject` and `s3:ListBucket` on `kgx-translator-ingests`.
 - An Elastic IP so the instance has a fixed public IP.
 - The domain kgx-storage.ci.transltr.io pointing at that IP (DNS A record).
 - Security group open for: 22 (SSH), 80 (HTTP, for certbot and redirect), 443 (HTTPS).
@@ -288,7 +288,7 @@ The instance probably doesn’t have an IAM role or the role can’t read the bu
 ```bash
 curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/
 ```
-If that returns a role name, the role is attached. Then in AWS make sure that role has `s3:GetObject` and `s3:ListBucket` on the `translator-ingests` bucket.
+If that returns a role name, the role is attached. Then in AWS make sure that role has `s3:GetObject` and `s3:ListBucket` on the `kgx-translator-ingests` bucket.
 
 ## IAM permissions
 
@@ -305,8 +305,8 @@ The EC2 instance role needs this policy (or equivalent):
         "s3:ListBucket"
       ],
       "Resource": [
-        "arn:aws:s3:::translator-ingests",
-        "arn:aws:s3:::translator-ingests/*"
+        "arn:aws:s3:::kgx-translator-ingests",
+        "arn:aws:s3:::kgx-translator-ingests/*"
       ]
     }
   ]
@@ -336,12 +336,12 @@ python web_server.py
 # open http://localhost:5000/docs
 ```
 
-**Full browse UI** (folder listings, translator_kg banner, JSON viewer) without AWS credentials:
+**Full browse UI** (folder listings, translator_kg banner, JSON viewer):
 
-The `translator-ingests` bucket allows public read. Enable anonymous S3 in the app:
+The ITRB CI bucket `kgx-translator-ingests` is not publicly listable. Configure AWS credentials with `s3:GetObject` and `s3:ListBucket` on that bucket, then:
 
 ```bash
-KGX_ANONYMOUS_S3=1 PORT=5001 python web_server.py
+PORT=5001 python web_server.py
 ```
 
 Then open http://localhost:5001/. Use `PORT=5001` on macOS if port 5000 is taken by AirPlay Receiver.
@@ -352,7 +352,7 @@ Paths to spot-check UI changes:
 - http://localhost:5001/releases/translator_kg/
 - http://localhost:5001/releases/translator_kg_open/
 
-Without `KGX_ANONYMOUS_S3=1`, browse pages need AWS credentials (as on the EC2 instance). This dev server is single-threaded and not for production.
+`KGX_ANONYMOUS_S3=1` is only for buckets with a public-read policy (not `kgx-translator-ingests`). This dev server is single-threaded and not for production.
 
 ## Production URLs and downloads
 
@@ -391,7 +391,7 @@ Examples and more commands are on the /docs page.
 
 **Downloading with AWS CLI**
 
-If you have credentials that can read the bucket, you can use `aws s3 cp` and `aws s3 sync` on `s3://translator-ingests/`. See the docs page for paths and examples.
+If you have credentials that can read the bucket, you can use `aws s3 cp` and `aws s3 sync` on `s3://kgx-translator-ingests/`. See the docs page for paths and examples.
 
 **Example paths in the bucket**
 

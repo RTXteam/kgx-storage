@@ -18,7 +18,22 @@ from metrics_path_rules import exclude_key_for_folder_modified_date
 
 app = Flask(__name__)
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "kgx-translator-ingests")
-S3_CLIENT = boto3.client("s3")
+SITE_URL = "https://kgx-storage.ci.transltr.io"
+TRANSLATOR_KG_OPEN_PATH = "releases/translator_kg_open/"
+
+
+def _use_anonymous_s3() -> bool:
+    """Use unsigned S3 requests for local dev without AWS credentials."""
+    return os.environ.get("KGX_ANONYMOUS_S3", "").lower() in ("1", "true", "yes")
+
+
+def _create_s3_client():
+    if _use_anonymous_s3():
+        return boto3.client("s3", config=Config(signature_version=UNSIGNED))
+    return boto3.client("s3")
+
+
+S3_CLIENT = _create_s3_client()
 PUBLIC_DIR = Path(__file__).parent / "public"
 METRICS_FILE = Path(os.environ.get("METRICS_FILE", Path(__file__).parent / "metrics.json"))
 
@@ -1199,7 +1214,7 @@ DOCS_TEMPLATE = """
     </div>
 
     <div class="container">
-        <p class="intro">Download knowledge graph files via HTTPS or S3. Both methods are publicly accessible without authentication.</p>
+        <p class="intro">Download knowledge graph files via HTTPS (no authentication) or S3 (requires AWS credentials with bucket read access).</p>
 
         <h2>URL behavior</h2>
         <p>File URLs use the path to the file (e.g. <code>{{ site_url }}/releases/alliance/latest/graph-metadata.json</code>). Requesting that URL returns the file: JSON is returned as the response body, other formats trigger a download.</p>
@@ -1228,7 +1243,7 @@ DOCS_TEMPLATE = """
         <p class="note" style="margin-bottom: 30px;">Using <code>curl -fL</code> ensures your download scripts fail safely and prevent corrupted data from entering your analysis pipeline.</p>
 
         <h2>S3 Download</h2>
-        <p class="note">Requires AWS CLI installed locally</p>
+        <p class="note">Requires AWS CLI and credentials with read access to <code>s3://{{ bucket }}/</code>. Prefer the HTTPS commands above if you do not have AWS access.</p>
         
         <div class="cmd-label">Install AWS CLI</div>
         <div class="cmd-block" onclick="copy(this)">brew install awscli</div>
@@ -1237,15 +1252,14 @@ DOCS_TEMPLATE = """
         <p class="note">Ubuntu/Debian</p>
         
         <div class="cmd-label">Single File</div>
-        <div class="cmd-block" onclick="copy(this)">aws s3 cp s3://{{ bucket }}/releases/go_cam/latest/go_cam.tar.zst . --no-sign-request</div>
-        <p class="note">No AWS credentials required with --no-sign-request</p>
+        <div class="cmd-block" onclick="copy(this)">aws s3 cp s3://{{ bucket }}/releases/go_cam/latest/go_cam.tar.zst .</div>
         
         <div class="cmd-label">Entire Directory (Recursively)</div>
-        <div class="cmd-block" onclick="copy(this)">aws s3 sync s3://{{ bucket }}/releases/alliance/latest/ ./alliance/ --no-sign-request</div>
+        <div class="cmd-block" onclick="copy(this)">aws s3 sync s3://{{ bucket }}/releases/alliance/latest/ ./alliance/</div>
         <p class="note">Downloads all files in directory</p>
         
         <div class="cmd-label">List Available Files</div>
-        <div class="cmd-block" onclick="copy(this)">aws s3 ls s3://{{ bucket }}/releases/ --no-sign-request</div>
+        <div class="cmd-block" onclick="copy(this)">aws s3 ls s3://{{ bucket }}/releases/</div>
 
         <h2>Common Paths</h2>
         
