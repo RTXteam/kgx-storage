@@ -18,6 +18,7 @@ from metrics_path_rules import exclude_key_for_folder_modified_date
 
 app = Flask(__name__)
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "kgx-translator-ingests")
+SITE_URL = os.environ.get("SITE_URL", "https://kgx-storage.ci.transltr.io")
 S3_CLIENT = boto3.client("s3")
 PUBLIC_DIR = Path(__file__).parent / "public"
 METRICS_FILE = Path(os.environ.get("METRICS_FILE", Path(__file__).parent / "metrics.json"))
