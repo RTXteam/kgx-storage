@@ -28,15 +28,17 @@ pipeline {
     }
     stages {
         stage('Build Version'){
-            when { expression { return !params.BUILD_VERSION } }
             steps{
                 script {
-                    BUILD_VERSION_GENERATED = VersionNumber(
-                        versionNumberString: 'v${BUILD_YEAR, XX}.${BUILD_MONTH, XX}${BUILD_DAY, XX}.${BUILDS_TODAY}',
-                        projectStartDate:    '1970-01-01',
-                        skipFailedBuilds:    true)
-                    currentBuild.displayName = BUILD_VERSION_GENERATED
-                    env.BUILD_VERSION = BUILD_VERSION_GENERATED
+                    if (params.BUILD_VERSION?.trim()) {
+                        env.BUILD_VERSION = params.BUILD_VERSION.trim()
+                    } else {
+                        env.BUILD_VERSION = VersionNumber(
+                            versionNumberString: 'v${BUILD_YEAR, XX}.${BUILD_MONTH, XX}${BUILD_DAY, XX}.${BUILDS_TODAY}',
+                            projectStartDate:    '1970-01-01',
+                            skipFailedBuilds:    true)
+                    }
+                    currentBuild.displayName = env.BUILD_VERSION
                     env.BUILD = 'true'
                 }
             }
@@ -48,7 +50,6 @@ pipeline {
             }
         }
         stage('Build Docker') {
-           when { expression { return env.BUILD == 'true' }}
             steps {
                 script {
                     sh """#!/bin/bash

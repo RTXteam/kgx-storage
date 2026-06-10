@@ -18,8 +18,11 @@ from metrics_path_rules import exclude_key_for_folder_modified_date
 
 app = Flask(__name__)
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "kgx-translator-ingests")
-SITE_URL = "https://kgx-storage.ci.transltr.io"
-TRANSLATOR_KG_OPEN_PATH = "releases/translator_kg_open/"
+DEFAULT_SITE_URL = "https://kgx-storage.ci.transltr.io"
+SITE_URL = os.environ.get("SITE_URL", DEFAULT_SITE_URL)
+TRANSLATOR_KG_OPEN_PATH = os.environ.get(
+    "TRANSLATOR_KG_OPEN_PATH", "releases/translator_kg_open/"
+)
 
 
 def _use_anonymous_s3() -> bool:
