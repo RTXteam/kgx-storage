@@ -18,25 +18,8 @@ from metrics_path_rules import exclude_key_for_folder_modified_date
 
 app = Flask(__name__)
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "kgx-translator-ingests")
-DEFAULT_SITE_URL = "https://kgx-storage.ci.transltr.io"
-SITE_URL = os.environ.get("SITE_URL", DEFAULT_SITE_URL)
-TRANSLATOR_KG_OPEN_PATH = os.environ.get(
-    "TRANSLATOR_KG_OPEN_PATH", "releases/translator_kg_open/"
-)
-
-
-def _use_anonymous_s3() -> bool:
-    """Use unsigned S3 requests for local dev without AWS credentials."""
-    return os.environ.get("KGX_ANONYMOUS_S3", "").lower() in ("1", "true", "yes")
-
-
-def _create_s3_client():
-    if _use_anonymous_s3():
-        return boto3.client("s3", config=Config(signature_version=UNSIGNED))
-    return boto3.client("s3")
-
-
-S3_CLIENT = _create_s3_client()
+SITE_URL = os.environ.get("SITE_URL", "https://kgx-storage.ci.transltr.io")
+S3_CLIENT = boto3.client("s3")
 PUBLIC_DIR = Path(__file__).parent / "public"
 METRICS_FILE = Path(os.environ.get("METRICS_FILE", Path(__file__).parent / "metrics.json"))
 TRANSLATOR_KG_OPEN_PATH = "releases/translator_kg_open"
